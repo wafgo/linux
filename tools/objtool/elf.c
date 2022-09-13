@@ -257,16 +257,17 @@ struct reloc *find_reloc_by_dest_range(const struct elf *elf, struct section *se
 	if (!sec->reloc)
 		return NULL;
 
+
 	sec = sec->reloc;
 
 	for_offset_range(o, offset, offset + len) {
 		elf_hash_for_each_possible(reloc, reloc, hash,
 					   sec_offset_hash(sec, o)) {
+
 			if (reloc->sec != sec)
 				continue;
-
 			if (reloc->offset >= offset && reloc->offset < offset + len) {
-				if (!r || reloc->offset < r->offset)
+				if ((!r || reloc->offset < r->offset) && strlen(reloc->sym->name) != 0) 
 					r = reloc;
 			}
 		}

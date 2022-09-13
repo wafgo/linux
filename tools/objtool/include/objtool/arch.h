@@ -88,8 +88,11 @@ const char *arch_ret_insn(int len);
 
 int arch_decode_hint_reg(u8 sp_reg, int *base);
 
-bool arch_is_retpoline(struct symbol *sym);
+int arch_cfa_bp_offset(struct cfi_state *cfi);
+int arch_cfa_rax_offset(struct cfi_state *cfi);
 
+bool arch_is_retpoline(struct symbol *sym);
+struct reloc *arch_insn_reloc(struct objtool_file *file, struct instruction *insn);
 int arch_rewrite_retpolines(struct objtool_file *file);
 
 #endif /* _ARCH_H */

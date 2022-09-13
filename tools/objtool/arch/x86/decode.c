@@ -787,3 +787,13 @@ bool arch_is_retpoline(struct symbol *sym)
 {
 	return !strncmp(sym->name, "__x86_indirect_", 15);
 }
+
+int arch_cfa_bp_offset(struct cfi_state *cfi)
+{
+	return -cfi->cfa.offset;
+}
+
+int arch_cfa_rax_offset(struct cfi_state *cfi)
+{
+	return -cfi->cfa.offset + 8;
+}

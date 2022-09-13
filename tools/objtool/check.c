@@ -1766,6 +1766,9 @@ static int add_jump_table(struct objtool_file *file, struct instruction *insn,
 		return -1;
 	}
 
+	WARN_FUNC("found jump table",
+			  insn->sec, insn->offset);
+	printf("------------> dest instr 0x%lx\n", insn->offset);
 	return 0;
 }
 
@@ -2352,8 +2355,8 @@ static bool has_valid_stack_frame(struct insn_state *state)
 	struct cfi_state *cfi = &state->cfi;
 
 	if (cfi->cfa.base == CFI_BP &&
-	    check_reg_frame_pos(&cfi->regs[CFI_BP], -cfi->cfa.offset) &&
-	    check_reg_frame_pos(&cfi->regs[CFI_RA], -cfi->cfa.offset + 8))
+	    check_reg_frame_pos(&cfi->regs[CFI_BP], arch_cfa_bp_offset(cfi)) &&
+	    check_reg_frame_pos(&cfi->regs[CFI_RA], arch_cfa_rax_offset(cfi)))
 		return true;
 
 	if (cfi->drap && cfi->regs[CFI_BP].base == CFI_BP)
@@ -2615,8 +2618,8 @@ static int update_cfi_state(struct instruction *insn,
 			}
 
 			if (!cfi->drap && op->src.reg == CFI_SP &&
-			    op->dest.reg == CFI_BP && cfa->base == CFI_SP &&
-			    check_reg_frame_pos(&regs[CFI_BP], -cfa->offset + op->src.offset)) {
+			    op->dest.reg == CFI_BP && cfa->base == CFI_SP/*  && */
+			    /* check_reg_frame_pos(&regs[CFI_BP], -cfa->offset + op->src.offset) */) {
 
 				/* lea disp(%rsp), %rbp */
 				cfa->base = CFI_BP;
