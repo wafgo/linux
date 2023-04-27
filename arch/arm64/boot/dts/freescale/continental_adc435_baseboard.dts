@@ -1,0 +1,1664 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright 2023 Continental Automotive Technologies GmbH
+ */
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include "s32g2.dtsi"
+#include "s32g-nxp-flash-macronix.dtsi"
+
+/ {
+	model = "Continental ADC435 Baseboard v1.1";
+	chosen {
+		stdout-path = "serial1:115200n8";
+	};
+
+	usbphynop: usbphynop {
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
+	};
+};
+
+&pfe_mdio2 {
+	/* AQR113 on S32G-PROCEVB3-S */
+	pfe_mdio_a_phy8: ethernet-phy@8 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <8>;
+	};
+};
+
+&pfe_netif0 {
+	phy-mode = "sgmii";
+	phy-handle = <&pfe_mdio_a_phy8>;
+};
+
+&usbmisc {
+	status = "okay";
+};
+
+&usbotg {
+	pinctrl-names = "default";
+	pinctrl-0 = <&usbotg_pins>;
+	fsl,usbphy = <&usbphynop>;
+	status = "disabled";
+};
+
+&generic_timer {
+	clock-frequency = <5000000>;
+};
+
+&i2c1 {
+	pinctrl-names = "default", "gpio";
+	pinctrl-0 = <&i2c1_pins>;
+	pinctrl-1 = <&i2c1_gpio_pins>;
+	scl-gpios = <&gpio 163 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 165 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
+};
+
+&i2c2 {
+	pinctrl-names = "default", "gpio";
+	pinctrl-0 = <&i2c2_pins>;
+	pinctrl-1 = <&i2c2_gpio_pins>;
+	scl-gpios = <&gpio 21 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 22 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
+	/* GPIO expanders */
+	pca9539@74 {
+			compatible = "nxp,pca9539";
+			reg = <0x74>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			CAM1_EN {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+			        output-low;
+			        line-name = "CAM1_EN";
+			};
+
+			CAM2_EN {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+			        output-low;
+			        line-name = "CAM2_EN";
+			};
+
+			CAM3_EN {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM4_EN {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM5_EN {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM6_EN {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM7_EN {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM8_EN {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM9_EN {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM10_EN {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			THER_EXP_HSSW {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			I_SEH_EXP_HSSW {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			I_SEL_EXP_HSSW {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW1 {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW2 {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW3 {
+				gpio-hog;
+				gpios = <15 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+		};
+
+		pca9539@76 {
+			compatible = "nxp,pca9539";
+			reg = <0x76>;
+			gpio-controller;
+			#gpio-cells = <0x02>;
+			pinctrl-names = "default";
+
+			EN_SMH_SI_3V3_SMPS_SYS {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				output-high;
+				line-name = "EN_SMH_SI_3V3_SMPS_SYS";
+			};
+
+			EN_SMH_SI_1V8_SMPS_SYS {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_1V2_SMPS_SYS {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_1V1_SMPS_SYS {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_0V9_SMPS_A_SYS {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_0V9_SMPS_B_SYS {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_0V8_SMPS_AB {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_CAN_FAS {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			PG_3V3_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V8_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V2_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V1_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V9_SMPS_A_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V9_SMPS_B_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V8_SMPS_A_SMH_P {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V8_SMPS_B_SMH_P {
+				gpio-hog;
+				gpios = <15 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+		};
+
+		pca9539@75 {
+			compatible = "nxp,pca9539";
+			reg = <0x75>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			EN_SMH_P_PREREG_SMPS_IPM {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_5V0_SMPS_IPM {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_CAN_C {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_PUMP_SMPS {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_STB_SMH_SI_CAN_FAS {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			N_RESET_SMH_P_CLK2 {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_RESET_SMH_P_CLK1 {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_RSTB_SMH_P_PCIE_SW {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			PG_PREREG_SMPS_IPM_SMH_P {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_IPM_SMH_P {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_PREREG_SMPS_FPM_SMH_P {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_FPM_SMH_P {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_BUCK_BOOST {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+		};
+
+		pca9539@77 {
+			compatible = "nxp,pca9539";
+			reg = <0x77>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			ALERT_TEMP_1_SMH_P {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			ALERT_TEMP_2_SMH_P {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			ALERT_TEMP_3_SMH_P {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			GPI2_SOM2_MMH_SMH {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				input;
+		        };
+		        N_RESET_SMH_P_ETH_SW1 {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				output-high;
+		        };
+		        N_RESET_SMH_P_ETH_SW2 {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+		};
+};
+
+&i2c4 {
+	pinctrl-names = "default", "gpio";
+	pinctrl-0 = <&i2c4_pins>;
+	pinctrl-1 = <&i2c4_gpio_pins>;
+	scl-gpios = <&gpio 34 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 33 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
+};
+
+&usdhc0 {
+	no-1-8-v;
+	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+	pinctrl-0 = <&sd0_pins_default>;
+	pinctrl-1 = <&sd0_pins_100mhz>;
+	pinctrl-2 = <&sd0_pins_200mhz>;
+	status = "okay";
+};
+
+&can0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&can0_pins>;
+	status = "okay";
+};
+
+&can2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&can2_pins>;
+	status = "okay";
+};
+
+&fccu {
+	status = "okay";
+};
+
+&swt3 {
+	status = "okay";
+};
+
+&swt4 {
+	status = "okay";
+};
+
+&swt5 {
+	status = "okay";
+};
+
+&swt6 {
+	status = "okay";
+};
+
+&pit0 {
+	status = "okay";
+};
+
+&pit1 {
+	status = "okay";
+};
+
+&pinctrl {
+	status = "okay";
+
+	can0_pins: can0_pins {
+		can0_grp0 {
+			pinmux = <S32CC_PINMUX(44, FUNC1)>; /*PC_12 -> TXD CANFD FAS*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_150MHZ>;
+		};
+
+		can0_grp1 {
+			pinmux = <S32CC_PINMUX(43, FUNC0)>; /*PC_11 -> RXD CANFD FAS*/
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		can0_grp2 {
+			pinmux = <S32CC_PINMUX(513, FUNC2)>; /*PC_11 -> RXD CANFD FAS*/
+		};
+	};
+
+	can2_pins: can2_pins {
+		can2_grp0 {
+			pinmux = <S32CC_PINMUX(27, FUNC2)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_150MHZ>;
+		};
+
+		can2_grp1 {
+			pinmux = <S32CC_PINMUX(28, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		can2_grp2 {
+			pinmux = <S32CC_PINMUX(632, FUNC2)>;
+		};
+	};
+
+	dspi1_uss_enable: dspi1_uss_enable {
+		pinmux = <S32CC_PINMUX(98, FUNC0)>,/*PG02 -> N_RESET_USS*/
+		         <S32CC_PINMUX(175, FUNC0)>; /*PK15 -> EN_USS*/
+		output-enable;
+		slew-rate = <S32CC_SLEW_83MHZ>;
+	};
+
+	dspi0_pins: dspi0_pins {
+		dspi0_grp0 {
+			pinmux = <S32CC_PINMUX(25, FUNC5)>, /*PB_09 CS1 -> RTL9072 SW1*/
+			         <S32CC_PINMUX(26, FUNC3)>; /*PB_10 CS2 -> RTL9072 SW2*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi0_grp1 {
+			pinmux = <S32CC_PINMUX(15, FUNC1)>; /*PA_15 -> MOSI*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi0_grp2 {
+			pinmux = <S32CC_PINMUX(13, FUNC1)>; /*PA_13 -> SCK*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi0_grp3 {
+			pinmux = <S32CC_PINMUX(14, FUNC0)>; /*PA_14 -> MISO*/
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi0_grp4 {
+			pinmux = <S32CC_PINMUX(982, FUNC2)>; /*PA_14 -> MISO*/
+		};
+	};
+
+	/* dspi1_pins: dspi1_pins { */
+	/* 	dspi1_grp0 { */
+	/* 		pinmux = <S32CC_PINMUX(7, FUNC2)>; */
+	/* 		output-enable; */
+	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
+	/* 		bias-pull-up; */
+	/* 	}; */
+
+	/* 	dspi1_grp1 { */
+	/* 		pinmux = <S32CC_PINMUX(6, FUNC2)>; */
+	/* 		output-enable; */
+	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
+	/* 	}; */
+
+	/* 	dspi1_grp2 { */
+	/* 		pinmux = <S32CC_PINMUX(8, FUNC3)>; */
+	/* 		output-enable; */
+	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
+	/* 	}; */
+
+	/* 	dspi1_grp3 { */
+	/* 		pinmux = <S32CC_PINMUX(95, FUNC0)>; */
+	/* 		input-enable; */
+	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
+	/* 		bias-pull-up; */
+	/* 	}; */
+
+	/* 	dspi1_grp4 { */
+	/* 		pinmux = <S32CC_PINMUX(987, FUNC2)>; */
+	/* 	}; */
+	/* }; */
+	
+	dspi1_pins: dspi1_pins {
+		dspi1_grp0 {
+			pinmux = <S32CC_PINMUX(7, FUNC2)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi1_grp1 {
+			pinmux = <S32CC_PINMUX(6, FUNC2)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi1_grp2 {
+			pinmux = <S32CC_PINMUX(8, FUNC3)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi1_grp3 {
+			pinmux = <S32CC_PINMUX(95, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi1_grp4 {
+			pinmux = <S32CC_PINMUX(987, FUNC2)>;
+		};
+	};
+
+	dspi2_pins: dspi2_pins {
+		dspi2_grp0 {
+			pinmux = <S32CC_PINMUX(155, FUNC2)>; /*PJ_11 -> CS*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi2_grp1 {
+			pinmux = <S32CC_PINMUX(157, FUNC2)>; /*PJ_13 -> MOSI*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi2_grp2 {
+			pinmux = <S32CC_PINMUX(153, FUNC2)>; /*PJ_09 -> SCK*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi2_grp3 {
+			pinmux = <S32CC_PINMUX(158, FUNC0)>; /*PJ_14 -> MISO*/
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi2_grp4 {
+			pinmux = <S32CC_PINMUX(992, FUNC3)>; /*PJ_14 -> MISO*/
+		};
+	};
+
+	
+
+	dspi1slave_pins: dspi1slave_pins {
+		dspi1slave_grp0 {
+			pinmux = <S32CC_PINMUX(6, FUNC2)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi1slave_grp1 {
+			pinmux = <S32CC_PINMUX(7, FUNC2)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi1slave_grp2 {
+			pinmux = <S32CC_PINMUX(985, FUNC2)>,
+				 <S32CC_PINMUX(986, FUNC2)>,
+				 <S32CC_PINMUX(987, FUNC2)>;
+		};
+
+		dspi1slave_grp3 {
+			pinmux = <S32CC_PINMUX(8, FUNC3)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi1slave_grp4 {
+			pinmux = <S32CC_PINMUX(95, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+	};
+
+	dspi5_pins: dspi5_pins {
+		dspi5_grp0 {
+			pinmux = <S32CC_PINMUX(9, FUNC3)>,
+				 <S32CC_PINMUX(11, FUNC3)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		dspi5_grp1 {
+			pinmux = <S32CC_PINMUX(10, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		dspi5_grp2 {
+			pinmux = <S32CC_PINMUX(1007, FUNC2)>;
+		};
+
+		dspi5_grp3 {
+			pinmux = <S32CC_PINMUX(12, FUNC3)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_pins: i2c1_pins {
+		i2c1_grp0 {
+			pinmux = <S32CC_PINMUX(163, FUNC3)>, /*PK_03 -> CLK*/
+				 <S32CC_PINMUX(165, FUNC3)>; /*PK_05 -> SDA*/
+			drive-open-drain;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+
+		i2c1_grp1 {
+			pinmux = <S32CC_PINMUX(717, FUNC5)>,
+				 <S32CC_PINMUX(718, FUNC5)>;
+		};
+
+	};
+
+	i2c1_gpio_pins: i2c1_gpio_pins {
+		i2c1_gpio_grp0 {
+			pinmux = <S32CC_PINMUX(163, FUNC0)>,
+				 <S32CC_PINMUX(165, FUNC0)>;
+			drive-open-drain;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		i2c1_gpio_grp1 {
+			pinmux = <S32CC_PINMUX(717, FUNC0)>,
+				 <S32CC_PINMUX(718, FUNC0)>;
+		};
+	};
+
+	i2c2_pins: i2c2_pins {
+		i2c2_grp0 {
+			pinmux = <S32CC_PINMUX(21, FUNC1)>, /*PB_05 -> SCL*/
+				 <S32CC_PINMUX(22, FUNC1)>; /*PB_06 -> SDA*/
+			drive-open-drain;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+
+		i2c2_grp1 {
+			pinmux = <S32CC_PINMUX(719, FUNC2)>,
+				 <S32CC_PINMUX(720, FUNC2)>;
+		};
+
+	};
+
+	i2c2_gpio_pins: i2c2_gpio_pins {
+		i2c2_gpio_grp0 {
+			pinmux = <S32CC_PINMUX(719, FUNC0)>,
+				 <S32CC_PINMUX(720, FUNC0)>;
+		};
+
+		i2c2_gpio_grp1 {
+			pinmux = <S32CC_PINMUX(21, FUNC0)>,
+				 <S32CC_PINMUX(22, FUNC0)>;
+			drive-open-drain;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+	};
+
+	i2c4_pins: i2c4_pins {
+		i2c4_grp0 {
+			pinmux = <S32CC_PINMUX(33, FUNC1)>;
+			drive-open-drain;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+
+		i2c4_grp1 {
+			pinmux = <S32CC_PINMUX(724, FUNC3)>,
+				 <S32CC_PINMUX(723, FUNC3)>;
+		};
+
+		i2c4_grp2 {
+			pinmux = <S32CC_PINMUX(34, FUNC2)>;
+			drive-open-drain;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+	};
+
+	i2c4_gpio_pins: i2c4_gpio_pins {
+		i2c4_gpio_grp0 {
+			pinmux = <S32CC_PINMUX(33, FUNC0)>,
+				 <S32CC_PINMUX(34, FUNC0)>;
+			drive-open-drain;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		i2c4_gpio_grp1 {
+			pinmux = <S32CC_PINMUX(724, FUNC0)>,
+				 <S32CC_PINMUX(723, FUNC0)>;
+		};
+	};
+
+	usbotg_pins: usbotg_pins {
+		usbotg_grp0 {
+			pinmux = <S32CC_PINMUX(896, FUNC2)>,
+				 <S32CC_PINMUX(897, FUNC2)>,
+				 <S32CC_PINMUX(898, FUNC2)>,
+				 <S32CC_PINMUX(899, FUNC2)>,
+				 <S32CC_PINMUX(900, FUNC2)>,
+				 <S32CC_PINMUX(901, FUNC2)>,
+				 <S32CC_PINMUX(902, FUNC2)>,
+				 <S32CC_PINMUX(903, FUNC2)>,
+				 <S32CC_PINMUX(895, FUNC2)>,
+				 <S32CC_PINMUX(904, FUNC2)>,
+				 <S32CC_PINMUX(905, FUNC2)>;
+		};
+
+		usbotg_grp1 {
+			pinmux = <S32CC_PINMUX(62, FUNC1)>,
+				 <S32CC_PINMUX(63, FUNC1)>,
+				 <S32CC_PINMUX(64, FUNC1)>,
+				 <S32CC_PINMUX(65, FUNC1)>,
+				 <S32CC_PINMUX(188, FUNC1)>,
+				 <S32CC_PINMUX(189, FUNC1)>,
+				 <S32CC_PINMUX(190, FUNC1)>,
+				 <S32CC_PINMUX(112, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		usbotg_grp2 {
+			pinmux = <S32CC_PINMUX(184, FUNC0)>,
+				 <S32CC_PINMUX(185, FUNC0)>,
+				 <S32CC_PINMUX(187, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		usbotg_grp3 {
+			pinmux = <S32CC_PINMUX(186, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+	};
+
+	pfe2rgmiia_pins: pfe2rgmiia_pins {
+		pfe2rgmiia_grp0 {
+			pinmux = <S32CC_PINMUX(186, FUNC4)>, /*PL10 -> P9_TXD0*/
+				 <S32CC_PINMUX(187, FUNC2)>, /*PL11 -> P9_TXD1*/
+				 <S32CC_PINMUX(62, FUNC4)>, /*PD14 -> P9_TXD2*/
+				 <S32CC_PINMUX(63, FUNC5)>, /*PD15 -> P9_TXD3*/
+				 <S32CC_PINMUX(185, FUNC5)>; /*PL09 -> P9_TX_EN*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		pfe2rgmiia_grp1 {
+			pinmux = <S32CC_PINMUX(188, FUNC0)>, /*PL12 -> P9_RXD0*/
+				 <S32CC_PINMUX(189, FUNC0)>, /*PL13 -> P9_RXD1*/
+				 <S32CC_PINMUX(190, FUNC0)>, /*PL14 -> P9_RXD2*/
+				 <S32CC_PINMUX(112, FUNC0)>, /*PH00 -> P9_RXD3*/
+				 <S32CC_PINMUX(64, FUNC0)>, /*PE00 -> P9_RX_CLK*/
+				 <S32CC_PINMUX(65, FUNC0)>; /*PE01 -> P9_RX_DV*/
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		pfe2rgmiia_grp2 {
+			pinmux = <S32CC_PINMUX(879, FUNC2)>,
+				 <S32CC_PINMUX(885, FUNC2)>,
+				 <S32CC_PINMUX(881, FUNC2)>,
+				 <S32CC_PINMUX(882, FUNC2)>,
+				 <S32CC_PINMUX(883, FUNC2)>,
+				 <S32CC_PINMUX(884, FUNC2)>,
+				 <S32CC_PINMUX(886, FUNC2)>;
+		};
+
+		pfe2rgmiia_grp3 {
+			pinmux = <S32CC_PINMUX(184, FUNC5)>; /*PL08 -> P9_TX_CLK*/
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+	};
+
+	gmac0mdioc_pins: gmac0mdioc_pins {
+		gmac0mdioc_grp0 {
+			pinmux = <S32CC_PINMUX(60, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		gmac0mdioc_grp1 {
+			pinmux = <S32CC_PINMUX(61, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		gmac0mdioc_grp2 {
+			pinmux = <S32CC_PINMUX(527, FUNC2)>;
+		};
+	};
+
+	gmac0rgmiic_pins: gmac0rgmiic_pins {
+		gmac0rgmiic_grp0 {
+			pinmux = <S32CC_PINMUX(66, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		gmac0rgmiic_grp1 {
+			pinmux = <S32CC_PINMUX(538, FUNC2)>,
+				 <S32CC_PINMUX(529, FUNC2)>,
+				 <S32CC_PINMUX(530, FUNC2)>,
+				 <S32CC_PINMUX(531, FUNC2)>,
+				 <S32CC_PINMUX(532, FUNC2)>,
+				 <S32CC_PINMUX(533, FUNC2)>,
+				 <S32CC_PINMUX(534, FUNC2)>;
+		};
+
+		gmac0rgmiic_grp2 {
+			pinmux = <S32CC_PINMUX(67, FUNC1)>,
+				 <S32CC_PINMUX(68, FUNC1)>,
+				 <S32CC_PINMUX(69, FUNC1)>,
+				 <S32CC_PINMUX(70, FUNC1)>,
+				 <S32CC_PINMUX(71, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		gmac0rgmiic_grp3 {
+			pinmux = <S32CC_PINMUX(72, FUNC0)>,
+				 <S32CC_PINMUX(73, FUNC0)>,
+				 <S32CC_PINMUX(74, FUNC0)>,
+				 <S32CC_PINMUX(75, FUNC0)>,
+				 <S32CC_PINMUX(76, FUNC0)>,
+				 <S32CC_PINMUX(77, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+	};
+
+
+	ftm0_pins: ftm0_pins {
+		ftm0_grp0 {
+			pinmux = <S32CC_PINMUX(657, FUNC2)>;
+		};
+
+		ftm0_grp1 {
+			pinmux = <S32CC_PINMUX(18, FUNC2)>,
+				 <S32CC_PINMUX(180, FUNC2)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		ftm0_grp2 {
+			pinmux = <S32CC_PINMUX(177, FUNC3)>,
+				 <S32CC_PINMUX(181, FUNC3)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		ftm0_grp3 {
+			pinmux = <S32CC_PINMUX(656, FUNC4)>;
+		};
+
+		ftm0_grp4 {
+			pinmux = <S32CC_PINMUX(658, FUNC5)>;
+		};
+
+		ftm0_grp5 {
+			pinmux = <S32CC_PINMUX(659, FUNC6)>;
+		};
+	};
+
+	ftm1_pins: ftm1_pins {
+		ftm1_grp0 {
+			pinmux = <S32CC_PINMUX(29, FUNC3)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		ftm1_grp1 {
+			pinmux = <S32CC_PINMUX(667, FUNC4)>;
+		};
+
+		ftm1_grp2 {
+			pinmux = <S32CC_PINMUX(668, FUNC3)>;
+		};
+
+		ftm1_grp3 {
+			pinmux = <S32CC_PINMUX(31, FUNC4)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		ftm1_grp4 {
+			pinmux = <S32CC_PINMUX(32, FUNC2)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		ftm1_grp5 {
+			pinmux = <S32CC_PINMUX(669, FUNC2)>;
+		};
+	};
+
+
+	sd0_pins_default: sd0 {
+		sd0_grp0 {
+			pinmux = <S32CC_PINMUX(46, FUNC1)>,
+				 <S32CC_PINMUX(56, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+			bias-pull-down;
+		};
+
+		sd0_grp1 {
+			pinmux = <S32CC_PINMUX(47, FUNC1)>,
+				 <S32CC_PINMUX(48, FUNC1)>,
+				 <S32CC_PINMUX(49, FUNC1)>,
+				 <S32CC_PINMUX(50, FUNC1)>,
+				 <S32CC_PINMUX(51, FUNC1)>,
+				 <S32CC_PINMUX(52, FUNC1)>,
+				 <S32CC_PINMUX(53, FUNC1)>,
+				 <S32CC_PINMUX(54, FUNC1)>,
+				 <S32CC_PINMUX(55, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+			bias-pull-up;
+		};
+
+		sd0_grp2 {
+			pinmux = <S32CC_PINMUX(57, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+
+		sd0_grp3 {
+			pinmux = <S32CC_PINMUX(58, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_83MHZ>;
+		};
+
+		sd0_grp4 {
+			pinmux = <S32CC_PINMUX(515, FUNC2)>,
+				 <S32CC_PINMUX(516, FUNC2)>,
+				 <S32CC_PINMUX(517, FUNC2)>,
+				 <S32CC_PINMUX(520, FUNC2)>,
+				 <S32CC_PINMUX(521, FUNC2)>,
+				 <S32CC_PINMUX(522, FUNC2)>,
+				 <S32CC_PINMUX(523, FUNC2)>,
+				 <S32CC_PINMUX(519, FUNC2)>,
+				 <S32CC_PINMUX(518, FUNC2)>,
+				 <S32CC_PINMUX(524, FUNC2)>;
+		};
+
+	};
+
+	sd0_pins_100mhz: sd0 {
+		sd0_grp0 {
+			pinmux = <S32CC_PINMUX(46, FUNC1)>,
+				 <S32CC_PINMUX(56, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_133MHZ>;
+			bias-pull-down;
+		};
+
+		sd0_grp1 {
+			pinmux = <S32CC_PINMUX(47, FUNC1)>,
+				 <S32CC_PINMUX(48, FUNC1)>,
+				 <S32CC_PINMUX(49, FUNC1)>,
+				 <S32CC_PINMUX(50, FUNC1)>,
+				 <S32CC_PINMUX(51, FUNC1)>,
+				 <S32CC_PINMUX(52, FUNC1)>,
+				 <S32CC_PINMUX(53, FUNC1)>,
+				 <S32CC_PINMUX(54, FUNC1)>,
+				 <S32CC_PINMUX(55, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_133MHZ>;
+			bias-pull-up;
+		};
+
+		sd0_grp2 {
+			pinmux = <S32CC_PINMUX(57, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_133MHZ>;
+		};
+
+		sd0_grp3 {
+			pinmux = <S32CC_PINMUX(58, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_133MHZ>;
+		};
+
+		sd0_grp4 {
+			pinmux = <S32CC_PINMUX(515, FUNC2)>,
+				 <S32CC_PINMUX(516, FUNC2)>,
+				 <S32CC_PINMUX(517, FUNC2)>,
+				 <S32CC_PINMUX(520, FUNC2)>,
+				 <S32CC_PINMUX(521, FUNC2)>,
+				 <S32CC_PINMUX(522, FUNC2)>,
+				 <S32CC_PINMUX(523, FUNC2)>,
+				 <S32CC_PINMUX(519, FUNC2)>,
+				 <S32CC_PINMUX(518, FUNC2)>,
+				 <S32CC_PINMUX(524, FUNC2)>;
+		};
+
+	};
+
+	sd0_pins_200mhz: sd0 {
+		sd0_grp0 {
+			pinmux = <S32CC_PINMUX(46, FUNC1)>,
+				 <S32CC_PINMUX(56, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-down;
+		};
+
+		sd0_grp1 {
+			pinmux = <S32CC_PINMUX(47, FUNC1)>,
+				 <S32CC_PINMUX(48, FUNC1)>,
+				 <S32CC_PINMUX(49, FUNC1)>,
+				 <S32CC_PINMUX(50, FUNC1)>,
+				 <S32CC_PINMUX(51, FUNC1)>,
+				 <S32CC_PINMUX(52, FUNC1)>,
+				 <S32CC_PINMUX(53, FUNC1)>,
+				 <S32CC_PINMUX(54, FUNC1)>,
+				 <S32CC_PINMUX(55, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+			bias-pull-up;
+		};
+
+		sd0_grp2 {
+			pinmux = <S32CC_PINMUX(57, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		sd0_grp3 {
+			pinmux = <S32CC_PINMUX(58, FUNC0)>;
+			input-enable;
+			slew-rate = <S32CC_SLEW_208MHZ>;
+		};
+
+		sd0_grp4 {
+			pinmux = <S32CC_PINMUX(515, FUNC2)>,
+				 <S32CC_PINMUX(516, FUNC2)>,
+				 <S32CC_PINMUX(517, FUNC2)>,
+				 <S32CC_PINMUX(520, FUNC2)>,
+				 <S32CC_PINMUX(521, FUNC2)>,
+				 <S32CC_PINMUX(522, FUNC2)>,
+				 <S32CC_PINMUX(523, FUNC2)>,
+				 <S32CC_PINMUX(519, FUNC2)>,
+				 <S32CC_PINMUX(518, FUNC2)>,
+				 <S32CC_PINMUX(524, FUNC2)>;
+		};
+
+	};
+};
+
+&pcie0 {
+	status = "okay";
+};
+
+&pcie1 {
+	status = "okay";
+};
+
+&qspi {
+	status = "okay";
+};
+
+&llce_dte_sram {
+	status = "okay";
+};
+
+&llce_ppe_rx_sram {
+	status = "okay";
+};
+
+&llce_ppe_tx_sram {
+	status = "okay";
+};
+
+&llce_frpe_sram {
+	status = "okay";
+};
+
+&llce_shmem {
+	status = "okay";
+};
+
+&llce_boot_status {
+	status = "okay";
+};
+
+&llce_can1 {
+	status = "okay";
+};
+
+&llce_can2 {
+	status = "okay";
+};
+
+&llce_can3 {
+	status = "okay";
+};
+
+&llce_can4 {
+	status = "okay";
+};
+
+&llce_can5 {
+	status = "okay";
+};
+
+&llce_can6 {
+	status = "okay";
+};
+
+&llce_can7 {
+	status = "okay";
+};
+
+&llce_can8 {
+	status = "okay";
+};
+
+&llce_can9 {
+	status = "okay";
+};
+
+&llce_can10 {
+	status = "okay";
+};
+
+&llce_can11 {
+	status = "okay";
+};
+
+&llce_can12 {
+	status = "okay";
+};
+
+&llce_can13 {
+	status = "okay";
+};
+
+&llce_can14 {
+	/* LLCE CAN 14 uses the same transceiver as FLEXCAN2.
+	 * By default, FLEXCAN2 is connected to the transceiver.
+	 */
+	status = "disabled";
+};
+
+&llce_can15 {
+	/* LLCE CAN 15 uses the same transceiver as FLEXCAN3.
+	 * By default, FLEXCAN3 is connected to the transceiver.
+	 */
+	status = "disabled";
+};
+
+&gmac0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&gmac0rgmiic_pins>, <&gmac0mdioc_pins>;
+	phy-handle = <&gmac_mdio_c_phy1>;
+	phy-mode = "rgmii-id";
+};
+
+
+&gmac0_mdio {
+	
+	/* AQR107 on S32RGV-VNP-PLAT */
+	gmac_mdio_c_phy1: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <1>;
+	};
+	/* KSZ9031RNX on S32G-PROCEVB-S/S32G-PROCEVB3-S */
+	gmac0_mdio_c_phy4: ethernet-phy@4 {
+		reg = <4>;
+	};
+	/* KSZ9031RNX on S32RGV-VNP-PLAT */
+	gmac_mdio_c_phy5: ethernet-phy@5 {
+		status = "disabled"; /* blocked by USB by default */
+		reg = <5>;
+	};
+};
+&pfe {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pfe2rgmiia_pins>;
+};
+
+&pfe_mdio0 {
+	/* used by USB ULPI */
+	status = "disabled";
+};
+
+&pfe_mdio1 {
+	/* unused */
+	status = "disabled";
+};
+
+&pfe_mdio2 {
+	/* unused */
+	status = "disabled";
+	/* /\* KSZ9031RNX over SJA1105Q P3 *\/ */
+	/* pfe_mdio_a_phy2: ethernet-phy@2 { */
+	/* 	reg = <2>; */
+	/* }; */
+	/* /\* KSZ9031RNX over SJA1105Q P4 *\/ */
+	/* pfe_mdio_a_phy3: ethernet-phy@3 { */
+	/* 	reg = <3>; */
+	/* }; */
+
+	/* /\* TJA1102 over SJA1105Q P1 *\/ */
+	/* pfe_mdio_a_phy6: ethernet-phy@6 { */
+	/* 	#address-cells = <1>; */
+	/* 	#size-cells = <0>; */
+	/* 	reg = <6>; */
+
+	/* 	/\* TJA1102 over SJA1105Q P2 *\/ */
+	/* 	pfe_mdio_a_phy7: ethernet-phy@7 { */
+	/* 		reg = <7>; */
+	/* 	}; */
+	/* }; */
+};
+
+&pfe_netif1 {
+	status = "disabled";
+	/* phy-mode = "sgmii"; */
+	/* phy-handle = <&gmac_mdio_c_phy1>; */
+};
+
+&pfe_netif2 {
+	phy-mode = "rgmii";
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+};
+
+&edma0 {
+	status = "okay";
+};
+
+&edma1 {
+	status = "okay";
+};
+
+
+&spi0 {
+	pinctrl-0 = <&dspi0_pins>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	rtl972_sw1: spidev@0 {
+		compatible = "realtek,rtl9072-aa";
+		spi-max-frequency = <4000000>;
+		reg = <0>;
+		fsl,spi-cs-sck-delay = <100>;
+		fsl,spi-sck-cs-delay = <100>;
+	};
+
+	rtl972_sw2: spidev@1 {
+		compatible = "realtek,rtl9072-aa";
+		spi-max-frequency = <4000000>;
+		reg = <1>;
+		fsl,spi-cs-sck-delay = <100>;
+		fsl,spi-sck-cs-delay = <100>;
+	};
+};
+
+&spi2 {
+	pinctrl-0 = <&dspi2_pins>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	deser3: spidev@0 {
+		compatible = "maxim,max-96712";
+		spi-max-frequency = <4000000>;
+		reg = <0>;
+		fsl,spi-cs-sck-delay = <100>;
+		fsl,spi-sck-cs-delay = <100>;
+	};
+};
+
+	/* misc_signals_bi: mis_signals_bi { */
+	/* 	pinmux = <S32CC_PINMUX(120, FUNC0)>;/\*PH08 -> GPIO0_PCIE_SW*\/ */
+	/* 	input-enable; */
+	/* 	slew-rate = <S32CC_SLEW_150MHZ>; */
+	/* }; */
+	
+&gpio {
+
+	/*FIXME, this holds the BASEBOARD always on, remove it after tests*/
+	SAFELOCK_SMH_SI {
+		gpio-hog;
+		gpios = <45 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "SAFELOCK_SMH_SI";
+	};
+	
+	N_PERST_SMH_P0_PCIE_SW {
+		gpio-hog;
+		gpios = <81 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PERST_SMH_P0_PCIE_SW";
+	};
+	
+	N_PWDNB_DES_3 {
+		gpio-hog;
+		gpios = <83 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_3";
+	};
+
+	ADC_MUX_IN1 {
+		gpio-hog;
+		gpios = <113 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "ADC_MUX_IN1";
+	};
+
+	ADC_MUX_IN2 {
+		gpio-hog;
+		gpios = <114 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "ADC_MUX_IN2";
+	};
+
+	ADC_MUX_IN3 {
+		gpio-hog;
+		gpios = <144 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "ADC_MUX_IN3";
+	};
+
+	N_RESET_SMH_SOM2_MMH {
+		gpio-hog;
+		gpios = <121 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_SOM2_MMH";
+	};
+
+	N_DIS_SMH_ETH_SW2 {
+		gpio-hog;
+		gpios = <159 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_DIS_SMH_ETH_SW2";
+	};
+
+	N_DIS_SMH_ETH_SW1 {
+		gpio-hog;
+		gpios = <149 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_DIS_SMH_ETH_SW1";
+	};
+
+	PWM_SMH_P_FAN {
+		gpio-hog;
+		gpios = <116 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "PWM_SMH_P_FAN";
+	};
+
+	EN_SMH_P_PREREG_SMPS_FPM {
+		gpio-hog;
+		gpios = <122 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "EN_SMH_P_PREREG_SMPS_FPM";
+	};
+
+	EN_SMH_P_5V0_SMPS_FPM {
+		gpio-hog;
+		gpios = <145 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "EN_SMH_P_5V0_SMPS_FPM";
+	};
+
+	N_STB_SMH_SI_CAN_C {
+		gpio-hog;
+		gpios = <161 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_STB_SMH_SI_CAN_C";
+	};
+
+	CLK_SYNC_SMH_SOM1 {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "CLK_SYNC_SMH_SOM1";
+	};
+
+	CLK_SYNC_SMH_DBG {
+		gpio-hog;
+		gpios = <12 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "CLK_SYNC_SMH_DBG";
+	};
+
+	N_RESET_SMH_SOM1_MMH {
+		gpio-hog;
+		gpios = <24 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_SOM1_MMH";
+	};
+
+	N_PWDNB_DES_1 {
+		gpio-hog;
+		gpios = <57 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_1";
+	};
+
+	N_RESET_SMH_P_EXP {
+		gpio-hog;
+		gpios = <78 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_P_EXP";
+	};
+
+	QSPI_NRESET {
+		gpio-hog;
+		gpios = <84 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "QSPI_NRESET";
+	};
+
+	N_RESET_SMH_USS {
+		gpio-hog;
+		gpios = <98 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_USS";
+	};
+
+	N_PWDNB_DES_2 {
+		gpio-hog;
+		gpios = <99 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_2";
+	};
+};
+
+&spi1 {
+	pinctrl-0 = <&dspi1_pins>, <&dspi1_uss_enable>;
+	pinctrl-1 = <&dspi1slave_pins>;
+	pinctrl-names = "default", "slave";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	spidev0: spidev@0 {
+		compatible = "atmel,atic176"; /* ??? there is no driver for it*/
+		spi-max-frequency = <4000000>;
+		reg = <0>;
+		fsl,spi-cs-sck-delay = <100>;
+		fsl,spi-sck-cs-delay = <100>;
+	};
+};
+
+&spi5 {
+	status = "disabled";
+	/* pinctrl-names = "default"; */
+	/* pinctrl-0 = <&dspi5_pins>; */
+	/* #address-cells = <1>; */
+	/* #size-cells = <0>; */
+	/* status = "okay"; */
+
+	/* ethernet-switch@0 { */
+	/* 	compatible = "nxp,sja1105q"; */
+	/* 	spi-max-frequency = <0x3D0900>; */
+	/* 	spi-cpha; */
+	/* 	fsl,spi-cs-sck-delay = <100>; */
+	/* 	fsl,spi-sck-cs-delay = <100>; */
+	/* 	reg = <0>; */
+
+	/* 	dsa,member = < 0 0 >; */
+
+	/* 	ports { */
+	/* 		#address-cells = <1>; */
+	/* 		#size-cells = <0>; */
+
+	/* 		port@0 { */
+	/* 			label = "sw0-p0"; */
+	/* 			phy-mode = "rgmii-id"; */
+	/* 			ethernet = <&pfe_netif2>; */
+	/* 			reg = <0>; */
+
+	/* 			fixed-link { */
+	/* 				speed = <1000>; */
+	/* 				full-duplex; */
+	/* 			}; */
+	/* 		}; */
+
+	/* 		enet_p1@1 { */
+	/* 			label = "enet_p1"; */
+	/* 			phy-mode = "mii"; */
+	/* 			phy-handle = <&pfe_mdio_a_phy6>; */
+	/* 			reg = <1>; */
+	/* 		}; */
+
+	/* 		enet_p2@2 { */
+	/* 			label = "enet_p2"; */
+	/* 			phy-mode = "mii"; */
+	/* 			phy-handle = <&pfe_mdio_a_phy7>; */
+	/* 			reg = <2>; */
+	/* 		}; */
+
+	/* 		enet_p3@3 { */
+	/* 			label = "enet_p3"; */
+	/* 			phy-mode = "rgmii-id"; */
+	/* 			phy-handle = <&pfe_mdio_a_phy2>; */
+	/* 			reg = <3>; */
+	/* 		}; */
+
+	/* 		enet_p4@4 { */
+	/* 			label = "enet_p4"; */
+	/* 			phy-mode = "rgmii-id"; */
+	/* 			phy-handle = <&pfe_mdio_a_phy3>; */
+	/* 			reg = <4>; */
+	/* 		}; */
+	/* 	}; */
+	/* }; */
+};
+
+&pwm0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ftm0_pins>;
+	status = "okay";
+};
+
+&pwm1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ftm1_pins>;
+	status = "okay";
+};
