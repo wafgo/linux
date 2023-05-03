@@ -6,7 +6,7 @@
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
 #include "s32g2.dtsi"
-#include "s32g-nxp-flash-macronix.dtsi"
+#include "micron-mt35xu01g-qspi-nor.dtsi"
 
 / {
 	model = "Continental ADC435 Baseboard v1.1";
