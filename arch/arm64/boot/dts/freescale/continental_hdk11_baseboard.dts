@@ -9,7 +9,7 @@
 #include "micron-mt35xu01g-qspi-nor.dtsi"
 
 / {
-	model = "Continental ADC435 Baseboard v1.1";
+	model = "Continental HDK v1.1";
 	chosen {
 		stdout-path = "serial1:115200n8";
 	};
