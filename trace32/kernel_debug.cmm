@@ -1,0 +1,117 @@
+RESet
+SYStem.RESet
+SYStem.CPU S32G274A-A53
+SYStem.JtagClock CTCK 15MHz
+; linux specific options
+; MMUSPACES ON & RESET Trigger OFF
+; activate Thread aware breakpoints
+SYStem.Option MMUSPACES ON
+SETUP.IMASKASM ON
+SETUP.IMASKHLL OFF
+TrOnchip.Set RESET OFF
+Break.CONFIG.UseContextID ON
+
+CORE.ASSIGN 1. 2. 3. 4.
+SYStem.Mode.Attach
+
+; load linux kernel symbols
+Data.LOAD.Elf ../vmlinux /NoCODE
+data.load.elf ~/devel/github/arm-trusted-firmware/build/conti_hdk_1_1/debug/bl31/bl31.elf /NoCODE /NoClear
+
+; Debugger Address Translation
+;  Kernel Virtual Address Range: 0xffffffc000000000--0xffffffc00cffffff (212M)
+;  Kernel Physical Address Base: 0xc3000000
+;  Table Format: Linux
+MMU.FORMAT LINUX swapper_pg_dir _text--(_end-1) 0x80000000
+;  Common Range:
+;  Module Virtual Address Range: 0xffffffbffc000000 (64M)
+;  resulting COMMON range (modules, kernel, vectors): 0xffffffbffc000000--0xffffffffffffffff
+; kernel
+TRANSlation.COMMON 0xffffffc000000000--0xffffffffffffffff
+; modules
+TRANSlation.COMMON.ADD 0xffffffbffc000000--0xffffffbfffffffff
+TRANSlation.TableWalk ON
+TRANSlation.ON
+
+; Linux Awareness
+TASK.CONFIG ~~/demo/arm/kernel/linux/awareness/linux.t32
+MENU.ReProgram ~~/demo/arm/kernel/linux/awareness/linux.men
+sYmbol.AutoLoad.CHECK ONGO
+; activate symbol autoloader
+TASK.sYmbol.Option AutoLoad Process
+;TASK.sYmbol.Option AutoLoad Module
+;TASK.sYmbol.Option AutoLoad Library
+
+IF STATE.RUN()
+  Break
+
+IF Analyzer()
+(
+  ; prepare offchip-trace
+  ; start clocks of TPIU and set the pinmuxing
+  ; enable trace clock and select bus
+  Data.Set EDBG:0x40000504 %LONG 0yxxxxxxxxxxxxxxxxxxxxx11xxxxxxxxx
+  ; pinmux
+  Data.Set A:0x4006C3DC %Long 0x200701  ; PG7 ; clock
+  Data.Set A:0x4006C28C %Long 0x200702  ; PB3 ;control
+  Data.Set A:0x4006C3E0 %Long 0x200701  ; PG8
+  Data.Set A:0x4006C3E4 %Long 0x200701  ; PG9
+  Data.Set A:0x4006C3E8 %Long 0x200701  ; PG10
+  Data.Set A:0x4006C3EC %Long 0x200701  ; PG11
+  Data.Set A:0x4006C3F0 %Long 0x200701  ; PG12
+  Data.Set A:0x4006C3F4 %Long 0x200701  ; PG13
+  Data.Set A:0x4006C3F8 %Long 0x200701  ; PG14
+  Data.Set A:0x4006C3FC %Long 0x200701  ; PG15
+  Data.Set A:0x4006C400 %Long 0x200701  ; PH0
+  Data.Set A:0x4006C404 %Long 0x200701  ; PH1
+  Data.Set A:0x4006C408 %Long 0x200701  ; PH2
+  Data.Set A:0x4006C40C %Long 0x200701  ; PH3
+  Data.Set A:0x4006C410 %Long 0x200701  ; PH4
+  Data.Set A:0x4006C414 %Long 0x200701  ; PH5
+  Data.Set A:0x4006C418 %Long 0x200701  ; PH6
+  Data.Set A:0x4006C41C %Long 0x200701  ; PH7
+
+  ; set TPIU to FIRC / 1
+  Data.Set A:0x40042880 %Long %LE 0x0
+  ;Disable the Effect of SWO clock on TPIU
+  Data.Set DAP:0x80011EF0 %LE %Long 0x1
+  Data.Set DAP:0x80011F00 %LE %Long 0x1
+
+  ; set TPIU to ARM PLL / 1
+  Data.Set A:0x40042888 %Long %LE 0x800F0000
+  Data.Set A:0x40042880 %Long %LE 0x2000000
+  WAIT 0.2s
+  Data.Set A:0x40042888 %Long %LE 0x80000000
+
+  ; Setup CTS
+  CTS.UseConst OFF
+  CTS.UseMemory OFF
+  CTS.UseRegister OFF
+  ; PortSize 16 - Continuous Mode
+  ; Enable Thread aware Trace
+  TPIU.PortSize 16
+  TPIU.PortMode Continuous
+  ETM.ContextID 32
+  ETM.Trace ON
+  ETM.ON
+
+  Trace.METHOD Analyzer
+  Analyzer.AutoFocus
+)
+ELSE
+(
+  ; prepare onchip-trace
+  ; Setup CTS
+  CTS.UseConst OFF
+  CTS.UseMemory OFF
+  CTS.UseRegister OFF
+
+  ; Enable Thread aware Trace
+  ETM.ContextID 32
+  ETM.Trace ON
+  ETM.ON
+
+  Trace.METHOD Onchip
+)
+
+ENDDO
