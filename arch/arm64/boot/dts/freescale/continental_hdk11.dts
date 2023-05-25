@@ -20,6 +20,7 @@
 	};
 };
 
+
 &pfe_mdio2 {
 	/* AQR113 on S32G-PROCEVB3-S */
 	pfe_mdio_a_phy8: ethernet-phy@8 {
@@ -28,9 +29,20 @@
 	};
 };
 
+&serdes0 {
+	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
+	status = "okay";
+};
+
+&serdes1 {
+	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
+	status = "okay";
+};
+
 &pfe_netif0 {
 	phy-mode = "sgmii";
 	phy-handle = <&pfe_mdio_a_phy8>;
+	status = "disabled";
 };
 
 &usbmisc {
@@ -548,38 +560,6 @@
 		};
 	};
 
-	/* dspi1_pins: dspi1_pins { */
-	/* 	dspi1_grp0 { */
-	/* 		pinmux = <S32CC_PINMUX(7, FUNC2)>; */
-	/* 		output-enable; */
-	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
-	/* 		bias-pull-up; */
-	/* 	}; */
-
-	/* 	dspi1_grp1 { */
-	/* 		pinmux = <S32CC_PINMUX(6, FUNC2)>; */
-	/* 		output-enable; */
-	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
-	/* 	}; */
-
-	/* 	dspi1_grp2 { */
-	/* 		pinmux = <S32CC_PINMUX(8, FUNC3)>; */
-	/* 		output-enable; */
-	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
-	/* 	}; */
-
-	/* 	dspi1_grp3 { */
-	/* 		pinmux = <S32CC_PINMUX(95, FUNC0)>; */
-	/* 		input-enable; */
-	/* 		slew-rate = <S32CC_SLEW_208MHZ>; */
-	/* 		bias-pull-up; */
-	/* 	}; */
-
-	/* 	dspi1_grp4 { */
-	/* 		pinmux = <S32CC_PINMUX(987, FUNC2)>; */
-	/* 	}; */
-	/* }; */
-	
 	dspi1_pins: dspi1_pins {
 		dspi1_grp0 {
 			pinmux = <S32CC_PINMUX(7, FUNC2)>;
@@ -1593,67 +1573,6 @@
 
 &spi5 {
 	status = "disabled";
-	/* pinctrl-names = "default"; */
-	/* pinctrl-0 = <&dspi5_pins>; */
-	/* #address-cells = <1>; */
-	/* #size-cells = <0>; */
-	/* status = "okay"; */
-
-	/* ethernet-switch@0 { */
-	/* 	compatible = "nxp,sja1105q"; */
-	/* 	spi-max-frequency = <0x3D0900>; */
-	/* 	spi-cpha; */
-	/* 	fsl,spi-cs-sck-delay = <100>; */
-	/* 	fsl,spi-sck-cs-delay = <100>; */
-	/* 	reg = <0>; */
-
-	/* 	dsa,member = < 0 0 >; */
-
-	/* 	ports { */
-	/* 		#address-cells = <1>; */
-	/* 		#size-cells = <0>; */
-
-	/* 		port@0 { */
-	/* 			label = "sw0-p0"; */
-	/* 			phy-mode = "rgmii-id"; */
-	/* 			ethernet = <&pfe_netif2>; */
-	/* 			reg = <0>; */
-
-	/* 			fixed-link { */
-	/* 				speed = <1000>; */
-	/* 				full-duplex; */
-	/* 			}; */
-	/* 		}; */
-
-	/* 		enet_p1@1 { */
-	/* 			label = "enet_p1"; */
-	/* 			phy-mode = "mii"; */
-	/* 			phy-handle = <&pfe_mdio_a_phy6>; */
-	/* 			reg = <1>; */
-	/* 		}; */
-
-	/* 		enet_p2@2 { */
-	/* 			label = "enet_p2"; */
-	/* 			phy-mode = "mii"; */
-	/* 			phy-handle = <&pfe_mdio_a_phy7>; */
-	/* 			reg = <2>; */
-	/* 		}; */
-
-	/* 		enet_p3@3 { */
-	/* 			label = "enet_p3"; */
-	/* 			phy-mode = "rgmii-id"; */
-	/* 			phy-handle = <&pfe_mdio_a_phy2>; */
-	/* 			reg = <3>; */
-	/* 		}; */
-
-	/* 		enet_p4@4 { */
-	/* 			label = "enet_p4"; */
-	/* 			phy-mode = "rgmii-id"; */
-	/* 			phy-handle = <&pfe_mdio_a_phy3>; */
-	/* 			reg = <4>; */
-	/* 		}; */
-	/* 	}; */
-	/* }; */
 };
 
 &pwm0 {
