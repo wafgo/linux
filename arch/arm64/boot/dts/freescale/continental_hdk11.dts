@@ -39,6 +39,14 @@
 	status = "okay";
 };
 
+&pcie0 {
+	status = "okay";
+};
+
+&pcie1 {
+	status = "okay";
+};
+
 &pfe_netif0 {
 	phy-mode = "sgmii";
 	phy-handle = <&pfe_mdio_a_phy8>;
