@@ -44,6 +44,10 @@
 };
 
 &pcie1 {
+	compatible = "nxp,s32cc-pcie-ep";
+	/* EP mode only */
+        num-ib-windows = <6>;
+        num-ob-windows = <6>;
 	status = "okay";
 };
 
@@ -348,7 +352,7 @@
 			N_RSTB_SMH_P_PCIE_SW {
 				gpio-hog;
 				gpios = <7 GPIO_ACTIVE_HIGH>;
-				output-low;
+				output-high;
 			};
 
 			PG_PREREG_SMPS_IPM_SMH_P {
@@ -1426,6 +1430,13 @@
 		gpios = <81 GPIO_ACTIVE_HIGH>;
 		output-high;
 		line-name = "N_PERST_SMH_P0_PCIE_SW";
+	};
+
+	N_PERST_SMH_P1_PCIE_SW {
+		gpio-hog;
+		gpios = <61 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PERST_SMH_P1_PCIE_SW";
 	};
 	
 	N_PWDNB_DES_3 {
