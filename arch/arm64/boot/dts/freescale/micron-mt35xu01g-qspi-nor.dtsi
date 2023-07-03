@@ -33,22 +33,22 @@
 
 			kernel@900000 {
 				label = "Kernel";
-				reg = <0x900000 0xE00000>;
+				reg = <0x900000 0xF00000>;
 			};
 
 			dtb@1700000 {
 				label = "DTB";
-				reg = <0x1700000 0x100000>;
+				reg = <0x1800000 0x100000>;
 			};
 
 			boot-env@1800000 {
 				label = "U-Boot-Env";
-				reg = <0x1800000 0x10000>;
+				reg = <0x1900000 0x10000>;
 			};
 
 			fip@1810000 {
 				label = "FIP";
-				reg = <0x1810000 0x400000>;
+				reg = <0x1910000 0x300000>;
 			};
 						
 
