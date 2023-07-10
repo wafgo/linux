@@ -1,0 +1,31 @@
+// t32 Tue May 30 17:19:25 2023
+
+B::
+
+TOOLBAR   ON
+STATUSBAR ON
+FramePOS 548.57,0.0,,,Maximized
+WinPAGE.RESet
+
+WinPAGE.Create P000
+WinCLEAR
+
+WinPOS 141.57 0.0 129. 25. 29. 1. W003
+WinTABS 10. 10. 25.
+wl.list /CORE 3
+
+WinPOS 144.86 31.133 129. 25. 29. 1. W002
+WinTABS 10. 10. 25.
+wl.list /CORE 2
+
+WinPOS 5.2857 29.0 129. 25. 29. 1. W001
+WinTABS 10. 10. 25.
+wl.list /CORE 1
+
+WinPOS 3.7143 0.0 129. 25. 29. 1. W000
+WinTABS 10. 10. 25.
+wl.list /CORE 0
+
+WinPAGE.select P000
+
+ENDDO
