@@ -1,4 +1,3 @@
-#include <linux/ceph/osd_client.h>
 #include <linux/ceph/mon_client.h>
 #include <linux/ceph/cls_lock_client.h>
 #include <linux/ceph/striper.h>
@@ -37,13 +36,14 @@
 #define DRV_MODULE_NAME "pci-remote-bdev"
 
 enum pci_barno {
-	BAR_0,
-	BAR_1,
-	BAR_2,
-	BAR_3,
-	BAR_4,
-	BAR_5,
+		BAR_0,
+		BAR_1,
+		BAR_2,
+		BAR_3,
+		BAR_4,
+		BAR_5,
 };
+
 
 struct pci_remote_bd_data {
 	enum pci_barno reg_bar;
@@ -55,6 +55,8 @@ struct pci_remote_block_device {
 	struct pci_dev *pdev;
 	/* Block layer tags. */
 	struct blk_mq_tag_set tag_set;
+	struct block_device *real_bd;
+	char *device_path;
 	spinlock_t lock;
 };
 
@@ -79,6 +81,8 @@ static const struct pci_device_id pci_remote_bd_tbl[] = {
 	REM_BD_PCI_DEVICE(0x0005, (kernel_ulong_t)&default_data),
 	{ 0 }
 };
+
+static int major;
 
 static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				     const struct blk_mq_queue_data *bd)
@@ -181,7 +185,30 @@ static const struct blk_mq_ops pci_rbd_mq_ops = {
 
 static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 {
+        int ret = 0;
 	struct pci_remote_block_device *rdev = bdev->bd_disk->private_data;
+	
+	rdev->device_path = kzalloc(64, GFP_KERNEL);
+	snprintf(rdev->device_path, 64, "/dev/vdb");
+	if (!rdev->device_path) {
+		dev_err(&rdev->pdev->dev, "OOM in string allocation\n");
+		return -ENXIO;
+	}
+
+	rdev->real_bd = blkdev_get_by_path(rdev->device_path,
+					   FMODE_READ | FMODE_WRITE, NULL);
+	if (IS_ERR(rdev->real_bd)) {
+		ret = PTR_ERR(rdev->real_bd);
+		if (ret != -ENOTBLK) {
+			dev_err(&rdev->pdev->dev, "failed to open block device %s: (%ld)\n",
+				rdev->device_path, PTR_ERR(rdev->real_bd));
+		}
+		kfree(rdev->device_path);
+		return -ENXIO;
+	}
+	dev_err(&rdev->pdev->dev, "Got reference to %s\n", rdev->device_path);
+	
+
 	/* struct device *dev = &rdev->pdev->dev; */
 	/* int ret = -ENXIO; */
 
@@ -192,6 +219,9 @@ static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 
 static void pci_rbd_release(struct gendisk *disk, fmode_t mode)
 {
+        struct pci_remote_block_device *rdev = (struct pci_remote_block_device *)disk->private_data;
+	if (rdev->device_path)
+	    kfree(rdev->device_path);
 	/* struct pci_remote_block_device *rdev = disk->private_data; */
 	/* struct device *dev = &rdev->pdev->dev; */
 	printk(KERN_ERR "-----------> RELEASE CALLED\n");
@@ -219,7 +249,9 @@ static int pci_rbd_ioctl(struct block_device *bdev, fmode_t mode,
 	int nr = _IOC_NR(cmd);
 	int sz = _IOC_SIZE(cmd);
 
-	printk(KERN_ERR "-------> IOCTL received %d. R/WR: 0x%x, TYPE: 0x%x, NR: 0x%x, SIZE: 0x%x\n", cmd, dir, tp, nr, sz);
+	printk(KERN_ERR
+	       "-------> IOCTL received %d. R/WR: 0x%x, TYPE: 0x%x, NR: 0x%x, SIZE: 0x%x\n",
+	       cmd, dir, tp, nr, sz);
 	return -EINVAL;
 }
 
@@ -246,21 +278,20 @@ static const struct block_device_operations pci_rbd_bdops = {
 static int pci_remote_bd_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *ent)
 {
-	int status;
 	struct device *dev = &pdev->dev;
-	int err;
+	int err, ret;
 	struct pci_remote_block_device *rdev =
 		devm_kzalloc(dev, sizeof(*rdev), GFP_KERNEL);
 	if (!rdev)
 		return -ENOMEM;
 
+	
 	rdev->pdev = pdev;
-
+	pci_set_drvdata(pdev, rdev);
 	dev_err(dev, "Probe from %s\n", __FUNCTION__);
-	status = register_blkdev(PCI_REMOTE_BLKDEV_MAJOR,
-				 PCI_REMOTE_BLKDEV_NAME);
-	if (status < 0) {
-		dev_err(dev, "unable to register mybdev block device\n");
+	major = register_blkdev(0, PCI_REMOTE_BLKDEV_NAME);
+	if (major < 0) {
+		dev_err(dev, "unable to register remote block device\n");
 		return -EBUSY;
 	}
 
@@ -284,7 +315,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 		goto out_tag_set;
 	}
 
-	rdev->gd->major = PCI_REMOTE_BLKDEV_MAJOR;
+	rdev->gd->major = major;
 	rdev->gd->minors = PCI_REMOTE_BLOCK_MINORS;
 	rdev->gd->first_minor = 1;
 	rdev->gd->fops = &pci_rbd_bdops;
@@ -292,7 +323,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->gd->queue->queuedata = rdev;
 
 	snprintf(rdev->gd->disk_name, 32, "pci_rbd");
-	set_capacity(rdev->gd, (1024 * 1024 * 1024) / SECTOR_SIZE);
+	set_capacity(rdev->gd, (2024 * 1024 * 1024) / SECTOR_SIZE);
 	device_add_disk(dev, rdev->gd, NULL);
 	return 0;
 out_tag_set:
@@ -305,7 +336,14 @@ out_free_dev:
 static void pci_remote_bd_remove(struct pci_dev *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct pci_remote_block_device *rdev = pci_get_drvdata(pdev);
+
+	del_gendisk(rdev->gd);
+	blk_cleanup_disk(rdev->gd);
+	blk_mq_free_tag_set(&rdev->tag_set);
 	dev_err(dev, "Remove from %s\n", __FUNCTION__);
+	devm_kfree(dev, rdev);
+	unregister_blkdev(major, PCI_REMOTE_BLKDEV_NAME);
 }
 
 MODULE_DEVICE_TABLE(pci, pci_remote_bd_tbl);

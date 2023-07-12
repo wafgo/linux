@@ -31,6 +31,7 @@
 #endif
 
 static int major;
+
 static DEFINE_IDA(vd_index_ida);
 
 static struct workqueue_struct *virtblk_wq;
