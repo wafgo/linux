@@ -1,5 +1,3 @@
-#include <linux/ceph/mon_client.h>
-#include <linux/ceph/cls_lock_client.h>
 #include <linux/ceph/striper.h>
 #include <linux/ceph/decode.h>
 #include <linux/fs_parser.h>
@@ -31,19 +29,17 @@
 #include <linux/hdreg.h>
 
 #define PCI_REMOTE_BLOCK_MINORS 16
-#define PCI_REMOTE_BLKDEV_MAJOR 290
 #define PCI_REMOTE_BLKDEV_NAME "remote-bd"
 #define DRV_MODULE_NAME "pci-remote-bdev"
 
 enum pci_barno {
-		BAR_0,
-		BAR_1,
-		BAR_2,
-		BAR_3,
-		BAR_4,
-		BAR_5,
+	BAR_0,
+	BAR_1,
+	BAR_2,
+	BAR_3,
+	BAR_4,
+	BAR_5,
 };
-
 
 struct pci_remote_bd_data {
 	enum pci_barno reg_bar;
@@ -58,10 +54,15 @@ struct pci_remote_block_device {
 	struct block_device *real_bd;
 	char *device_path;
 	spinlock_t lock;
+	const struct blk_mq_queue_data *bd;
 };
 
 struct pci_remote_bd_request {
-	int dummy;
+        struct pci_remote_block_device *rdev;
+	struct bio *bio;
+	u8 status;
+	struct sg_table sg_table;
+	struct scatterlist sg[];
 };
 
 static const struct pci_remote_bd_data default_data = {
@@ -82,39 +83,124 @@ static const struct pci_device_id pci_remote_bd_tbl[] = {
 	{ 0 }
 };
 
+static void pci_rbd_unmap_data(struct request *req, struct pci_remote_bd_request *rdr);
+static int pci_rbd_map_data(struct blk_mq_hw_ctx *hctx, struct request *req,struct pci_remote_bd_request *rdr);
+
 static int major;
+
+static char test_array[8 * PAGE_SIZE];
+static void read_complete(struct bio *bio)
+{
+	struct pci_remote_bd_request *rbd = bio->bi_private;
+	struct request *req = blk_mq_rq_from_pdu(rbd);
+	struct device *dev = &rbd->rdev->pdev->dev;
+	int nbytes = sg_copy_to_buffer(rbd->sg_table.sgl, sg_nents(rbd->sg_table.sgl),
+				       test_array, sizeof(test_array));
+	/* struct bio_vec bv; */
+	/* struct bvec_iter iter; */
+	/* int i = 0; */
+	dev_err(dev, "Finished reading bio %d bytes\n", nbytes);
+	/* void *kaddr = kmap(&pg[1]); */
+	/* printk(KERN_ALERT "--NUM OF VECS: %d\n", bio_sectors(bio)); */
+	/* /\* bio_for_each_segment(bv, bio, iter) { *\/ */
+	/* /\* 	printk(KERN_ALERT "--READING VEC\n"); *\/ */
+	/* /\* 	memcpy_from_bvec(my_local_read_array, &bv); *\/ */
+	/* /\* } *\/ */
+	print_hex_dump(KERN_ALERT, "", DUMP_PREFIX_OFFSET, 16, 1,
+			       test_array, nbytes, true);
+	/* kunmap(&pg[1]); */
+
+	/* printk(KERN_ALERT "-----------> FIN READING PAGE \n"); */
+	//    free_page((unsigned long) page_address(&pg[1]));
+	//bio_free_pages(bio);
+	pci_rbd_unmap_data(req, rbd);
+	blk_mq_complete_request(req);
+	dev_err(dev, "Finished reading bio END\n");
+}
+
+#define PCI_RBD_INLINE_SG_CNT 2
+
+static void pci_rbd_unmap_data(struct request *req, struct pci_remote_bd_request *rdr)
+{
+	if (blk_rq_nr_phys_segments(req))
+		sg_free_table_chained(&rdr->sg_table,PCI_RBD_INLINE_SG_CNT);
+}
+
+static int pci_rbd_map_data(struct blk_mq_hw_ctx *hctx, struct request *req,
+			    struct pci_remote_bd_request *rdr)
+{
+	int err;
+	if (!blk_rq_nr_phys_segments(req))
+		return 0;
+	rdr->sg_table.sgl = rdr->sg;
+	err = sg_alloc_table_chained(&rdr->sg_table,
+				     blk_rq_nr_phys_segments(req),
+				     rdr->sg_table.sgl, PCI_RBD_INLINE_SG_CNT);
+	if (unlikely(err))
+		return -ENOMEM;
+
+	return blk_rq_map_sg(hctx->queue, req, rdr->sg_table.sgl);
+}
 
 static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				     const struct blk_mq_queue_data *bd)
 {
-	/* struct pci_remote_block_device *rbd = hctx->queue->queuedata; */
-	/* struct req_iterator iter; */
-	/* struct bio_vec bvec; */
-	/* unsigned int len; */
-	/* int err; */
-	/* struct request *rq = bd->rq; */
-	/* sector_t sector = blk_rq_pos(rq); */
-	/* void *dst; */
-	/* size_t temp, count = 0; */
-	/* unsigned int offset; */
-	/* /\* struct rbd_img_request *img_req = blk_mq_rq_to_pdu(bd->rq); *\/ */
-	/* struct device *dev = &rbd->pdev->dev; */
-
+	struct pci_remote_block_device *rdev = hctx->queue->queuedata;
+	struct pci_remote_bd_request *rb_req = blk_mq_rq_to_pdu(bd->rq);
+	int num;
+	int pages_order;
+	struct page *pg;
+	rb_req->rdev = rdev;
 	blk_mq_start_request(bd->rq);
+	num = pci_rbd_map_data(hctx, bd->rq, rb_req);
+	
+	if (unlikely(num < 0)) 
+		return BLK_STS_RESOURCE;
+
 	switch (req_op(bd->rq)) {
 	case REQ_OP_DISCARD:
-		printk(KERN_ERR "----> DISCARD received\n");
+		dev_err(&rdev->pdev->dev, "----> DISCARD received\n");
 		break;
 	case REQ_OP_WRITE_ZEROES:
-		printk(KERN_ERR "----> REQ_OP_WRITE_ZEROES received\n");
+		dev_err(&rdev->pdev->dev, "----> REQ_OP_WRITE_ZEROES received\n");
 		break;
 	case REQ_OP_WRITE:
-		printk(KERN_ERR "----> WRITE received, %d\n",
-		       blk_rq_bytes(bd->rq));
+		printk(KERN_ERR "----> WRITE received, %d\n", blk_rq_bytes(bd->rq));
 		break;
 	case REQ_OP_READ:
-		printk(KERN_ERR "----> READ received %d\n",
-		       blk_rq_bytes(bd->rq));
+		printk(KERN_ERR "----> READ received %d --- current sector: %d\n",
+		       blk_rq_bytes(bd->rq), blk_rq_pos(bd->rq));
+		pages_order = get_order(blk_rq_bytes(bd->rq));
+		dev_err(&rdev->pdev->dev, "Order for %d bytes is %d\n",
+			blk_rq_bytes(bd->rq), pages_order);
+		pg = alloc_pages(GFP_KERNEL, pages_order);
+		if (pg) {
+			dev_err(&rdev->pdev->dev,
+				"Successfully allocated %d order pages\n",
+				pages_order);
+			// WHAT is the no_of_vecs?
+			rb_req->bio = bio_alloc(GFP_NOIO, 1);
+			if (!rb_req->bio) {
+				dev_err(&rdev->pdev->dev,
+					"Cannot allocate bio %d\n",
+					bio_sectors(rb_req->bio));
+				free_pages((unsigned long)page_address(pg), 1);
+				return BLK_STS_IOERR;
+			} else {
+				rb_req->bio->bi_private = rb_req;
+				bio_set_dev(rb_req->bio, rdev->real_bd);
+				rb_req->bio->bi_iter.bi_sector = blk_rq_pos(bd->rq);
+				rb_req->bio->bi_opf = REQ_OP_READ;
+				bio_add_page(rb_req->bio, pg, blk_rq_bytes(bd->rq), 0);
+				rb_req->bio->bi_end_io = read_complete;
+				rb_req->bio->bi_ioprio = bd->rq->bio->bi_ioprio + 10;
+				submit_bio(rb_req->bio);
+			}
+		} else {
+			dev_err(&rdev->pdev->dev,
+				"Could not get Pages for read \n",
+				__FUNCTION__);
+		}
 		/* spin_lock_irq(&rbd->lock); */
 		/* rq_for_each_segment (bvec, rq, iter) { */
 		/* 	len = bvec.bv_len; */
@@ -136,8 +222,8 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 		printk(KERN_ERR "unknown req_op %d", req_op(bd->rq));
 		return BLK_STS_IOERR;
 	}
+	//blk_mq_complete_request(bd->rq);
 
-	blk_mq_complete_request(bd->rq);
 	return BLK_STS_OK;
 }
 
@@ -185,9 +271,9 @@ static const struct blk_mq_ops pci_rbd_mq_ops = {
 
 static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 {
-        int ret = 0;
+	int ret = 0;
 	struct pci_remote_block_device *rdev = bdev->bd_disk->private_data;
-	
+
 	rdev->device_path = kzalloc(64, GFP_KERNEL);
 	snprintf(rdev->device_path, 64, "/dev/vdb");
 	if (!rdev->device_path) {
@@ -200,31 +286,29 @@ static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 	if (IS_ERR(rdev->real_bd)) {
 		ret = PTR_ERR(rdev->real_bd);
 		if (ret != -ENOTBLK) {
-			dev_err(&rdev->pdev->dev, "failed to open block device %s: (%ld)\n",
+			dev_err(&rdev->pdev->dev,
+				"failed to open block device %s: (%ld)\n",
 				rdev->device_path, PTR_ERR(rdev->real_bd));
 		}
 		kfree(rdev->device_path);
 		return -ENXIO;
 	}
-	dev_err(&rdev->pdev->dev, "Got reference to %s\n", rdev->device_path);
-	
-
-	/* struct device *dev = &rdev->pdev->dev; */
-	/* int ret = -ENXIO; */
-
-	printk(KERN_ERR "-----------> OPEN CALLED\n");
-
+	dev_err(&rdev->pdev->dev, "%s: Got reference to %s\n", __FUNCTION__,
+		rdev->device_path);
 	return 0;
 }
 
 static void pci_rbd_release(struct gendisk *disk, fmode_t mode)
 {
-        struct pci_remote_block_device *rdev = (struct pci_remote_block_device *)disk->private_data;
+	struct pci_remote_block_device *rdev =
+		(struct pci_remote_block_device *)disk->private_data;
 	if (rdev->device_path)
-	    kfree(rdev->device_path);
+		kfree(rdev->device_path);
+	dev_err(&rdev->pdev->dev, "%s: Releasing %s\n", __FUNCTION__,
+		rdev->device_path);
 	/* struct pci_remote_block_device *rdev = disk->private_data; */
 	/* struct device *dev = &rdev->pdev->dev; */
-	printk(KERN_ERR "-----------> RELEASE CALLED\n");
+	// printk(KERN_ERR "-----------> RELEASE CALLED\n");
 	//dev_err(dev, "-----------> RELEASE CALLED\n");
 }
 
@@ -285,7 +369,6 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	if (!rdev)
 		return -ENOMEM;
 
-	
 	rdev->pdev = pdev;
 	pci_set_drvdata(pdev, rdev);
 	dev_err(dev, "Probe from %s\n", __FUNCTION__);
@@ -302,7 +385,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->tag_set.numa_node = NUMA_NO_NODE;
 	rdev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 	rdev->tag_set.nr_hw_queues = 1; //num_present_cpus();
-	rdev->tag_set.cmd_size = sizeof(struct pci_remote_bd_request);
+	rdev->tag_set.cmd_size = sizeof(struct pci_remote_bd_request) + sizeof(struct scatterlist) * PCI_RBD_INLINE_SG_CNT;
 	rdev->tag_set.driver_data = rdev;
 
 	err = blk_mq_alloc_tag_set(&rdev->tag_set);
