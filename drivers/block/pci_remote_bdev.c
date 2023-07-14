@@ -28,8 +28,10 @@
 #include <linux/pci.h>
 #include <linux/pci_ids.h>
 #include <linux/pci_regs.h>
-
 #include <linux/hdreg.h>
+
+static char *block_dev_name = "/dev/vdb";
+module_param(block_dev_name, charp, 0444);
 
 #define PCI_REMOTE_BLOCK_MINORS 16
 #define PCI_REMOTE_BLKDEV_NAME "remote-bd"
@@ -68,7 +70,7 @@ struct pci_remote_bd_request {
 	u8 status;
 	struct page *pg;
 	int order;
-        int num_bios;
+	int num_bios;
 	struct work_struct bio_work;
 	struct sg_table sg_table;
 	struct scatterlist sg[];
@@ -139,7 +141,7 @@ static void read_complete(struct bio *bio)
 
 	struct request *req = blk_mq_rq_from_pdu(rbd);
 	if (--rbd->num_bios == 0) {
-	        pci_rbd_unmap_data(rbd);
+		pci_rbd_unmap_data(rbd);
 		blk_mq_complete_request(req);
 	}
 	bio_put(bio);
@@ -147,7 +149,7 @@ static void read_complete(struct bio *bio)
 
 static void pci_rbd_unmap_data(struct pci_remote_bd_request *rdr)
 {
-        struct request *req = blk_mq_rq_from_pdu(rdr);
+	struct request *req = blk_mq_rq_from_pdu(rdr);
 	if (blk_rq_nr_phys_segments(req))
 		sg_free_table_chained(&rdr->sg_table, PCI_RBD_INLINE_SG_CNT);
 }
@@ -199,24 +201,17 @@ static enum blk_eh_timer_return pci_rbd_timeout_rq(struct request *rq, bool res)
 	return BLK_EH_DONE;
 }
 
-static const struct blk_mq_ops pci_rbd_mq_ops = {
-	.queue_rq = pci_rbd_queue_rq,
-	.complete = pci_rbd_end_rq,
-	.timeout = pci_rbd_timeout_rq
-};
+static const struct blk_mq_ops pci_rbd_mq_ops = { .queue_rq = pci_rbd_queue_rq,
+						  .complete = pci_rbd_end_rq,
+						  .timeout =
+							  pci_rbd_timeout_rq };
 
 static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 {
 	int ret = 0;
 	struct pci_remote_block_device *rdev = bdev->bd_disk->private_data;
 
-	rdev->device_path = kzalloc(64, GFP_KERNEL);
-	snprintf(rdev->device_path, 64, "/dev/vdb");
-	if (!rdev->device_path) {
-		dev_err(&rdev->pdev->dev, "OOM in string allocation\n");
-		return -ENXIO;
-	}
-
+	rdev->device_path = block_dev_name;
 	rdev->real_bd = blkdev_get_by_path(rdev->device_path,
 					   FMODE_READ | FMODE_WRITE, NULL);
 	if (IS_ERR(rdev->real_bd)) {
@@ -226,7 +221,6 @@ static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 				"failed to open block device %s: (%ld)\n",
 				rdev->device_path, PTR_ERR(rdev->real_bd));
 		}
-		kfree(rdev->device_path);
 		return -ENXIO;
 	}
 	return 0;
@@ -234,18 +228,15 @@ static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 
 static void pci_rbd_release(struct gendisk *disk, fmode_t mode)
 {
-	struct pci_remote_block_device *rdev =
-		(struct pci_remote_block_device *)disk->private_data;
-	if (rdev->device_path)
-		kfree(rdev->device_path);
 }
 
 static int pci_rbd_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 {
-	geo->cylinders = get_capacity(bdev->bd_disk) / (4 * 16);
 	geo->heads = 4;
 	geo->sectors = 16;
-	return -EINVAL;
+	geo->cylinders =
+		get_capacity(bdev->bd_disk) / (geo->heads * geo->sectors);
+	return 0;
 }
 
 static int pci_rbd_ioctl(struct block_device *bdev, fmode_t mode,
@@ -270,7 +261,7 @@ static int pci_rbd_compat_ioctl(struct block_device *bdev, fmode_t mode,
 }
 #endif
 
-static const struct block_device_operations pci_rbd_bdops = {
+static const struct block_device_operations pci_rbd_ops = {
 	.open = pci_rbd_open,
 	.release = pci_rbd_release,
 	.getgeo = pci_rbd_getgeo,
@@ -290,6 +281,19 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 		devm_kzalloc(dev, sizeof(*rdev), GFP_KERNEL);
 	if (!rdev)
 		return -ENOMEM;
+
+	rdev->device_path = block_dev_name;
+	rdev->real_bd = blkdev_get_by_path(rdev->device_path,
+					   FMODE_READ | FMODE_WRITE, NULL);
+	if (IS_ERR(rdev->real_bd)) {
+		err = PTR_ERR(rdev->real_bd);
+		if (err != -ENOTBLK) {
+			dev_err(&rdev->pdev->dev,
+				"failed to open block device %s: (%ld)\n",
+				rdev->device_path, PTR_ERR(rdev->real_bd));
+		}
+		goto out_free_dev;
+	}
 
 	deferred_bio_add_workqueue =
 		alloc_workqueue("pci_rbd_bio_add", WQ_UNBOUND, 1);
@@ -337,12 +341,13 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->gd->major = major;
 	rdev->gd->minors = PCI_REMOTE_BLOCK_MINORS;
 	rdev->gd->first_minor = 1;
-	rdev->gd->fops = &pci_rbd_bdops;
+	rdev->gd->fops = &pci_rbd_ops;
 	rdev->gd->private_data = rdev;
 	rdev->gd->queue->queuedata = rdev;
 
 	snprintf(rdev->gd->disk_name, 32, "pci_rbd");
-	set_capacity(rdev->gd, (1073741824) / SECTOR_SIZE);
+	set_capacity(rdev->gd,
+		     get_capacity(bdev_whole(rdev->real_bd)->bd_disk));
 	device_add_disk(dev, rdev->gd, NULL);
 	return 0;
 out_tag_set:
