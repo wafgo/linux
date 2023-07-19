@@ -25,3 +25,13 @@ config PCI_EPF_NTB
 	  device tree.
 
 	  If in doubt, say "N" to disable Endpoint NTB driver.
+
+config PCI_EPF_BIO
+	tristate "PCI Endpoint BIO driver"
+	depends on PCI_ENDPOINT
+	select CRC32
+	help
+	  Select this configuration option to enable the Block IO driver for PCI Endpoint.
+	  BIO driver implements Block IO controller functionality using Virtio like access patterns
+
+	  If in doubt, say "N" to disable Endpoint BIO driver.
