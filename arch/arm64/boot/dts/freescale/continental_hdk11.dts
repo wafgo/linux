@@ -334,7 +334,7 @@
 			N_STB_SMH_SI_CAN_FAS {
 				gpio-hog;
 				gpios = <4 GPIO_ACTIVE_HIGH>;
-				output-low;
+				output-high;
 			};
 
 			N_RESET_SMH_P_CLK2 {
@@ -516,13 +516,13 @@
 
 	can2_pins: can2_pins {
 		can2_grp0 {
-			pinmux = <S32CC_PINMUX(27, FUNC2)>;
+			pinmux = <S32CC_PINMUX(27, FUNC2)>; /* PB12*/
 			output-enable;
 			slew-rate = <S32CC_SLEW_150MHZ>;
 		};
 
 		can2_grp1 {
-			pinmux = <S32CC_PINMUX(28, FUNC0)>;
+			pinmux = <S32CC_PINMUX(28, FUNC0)>; /*PB11*/
 			input-enable;
 			slew-rate = <S32CC_SLEW_208MHZ>;
 		};
