@@ -275,24 +275,53 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *ent)
 {
 	struct device *dev = &pdev->dev;
-	int err;
+	int err, bars;
+	u8 __iomem *hw_addr;
+	resource_size_t mmio_start, mmio_len;
 	struct pci_remote_block_device *rdev =
 		devm_kzalloc(dev, sizeof(*rdev), GFP_KERNEL);
 	if (!rdev)
 		return -ENOMEM;
 
-	rdev->device_path = block_dev_name;
-	rdev->real_bd = blkdev_get_by_path(rdev->device_path,
-					   FMODE_READ | FMODE_WRITE, NULL);
-	if (IS_ERR(rdev->real_bd)) {
-		err = PTR_ERR(rdev->real_bd);
-		if (err != -ENOTBLK) {
-			dev_err(&rdev->pdev->dev,
-				"failed to open block device %s: (%ld)\n",
-				rdev->device_path, PTR_ERR(rdev->real_bd));
-		}
-		goto out_free_dev;
+	err = pci_enable_device_mem(pdev);
+	if (err) {
+	    dev_err(dev, "unable to enable pci device mem\n");
+	    goto out_free_dev;
 	}
+
+	bars = pci_select_bars(pdev, IORESOURCE_MEM);
+	err = pci_request_selected_regions_exclusive(pdev, bars, DRV_MODULE_NAME);
+	if (err) {
+	    dev_err(dev, "unable to request pci memory region\n");
+	    goto out_free_dev;
+	}
+
+	pci_set_master(pdev);
+
+	mmio_start = pci_resource_start(pdev, 0);
+	mmio_len = pci_resource_len(pdev, 0);
+
+
+	dev_err(dev, "Alloc pci bar start: 0x%x, len: 0x%x\n", mmio_start, mmio_len);
+
+	hw_addr = ioremap(mmio_start, mmio_len);
+	
+	dev_err(dev, "HW ADDR 0x%x\n", hw_addr);
+	u32 pid = readl(hw_addr + 4);
+	dev_err(dev, "Reading %d from BAR offset 4\n", pid);
+	
+	/* rdev->device_path = block_dev_name; */
+	/* rdev->real_bd = blkdev_get_by_path(rdev->device_path, */
+	/* 				   FMODE_READ | FMODE_WRITE, NULL); */
+	/* if (IS_ERR(rdev->real_bd)) { */
+	/* 	err = PTR_ERR(rdev->real_bd); */
+	/* 	if (err != -ENOTBLK) { */
+	/* 		dev_err(&rdev->pdev->dev, */
+	/* 			"failed to open block device %s: (%ld)\n", */
+	/* 			rdev->device_path, PTR_ERR(rdev->real_bd)); */
+	/* 	} */
+	/* 	goto out_free_dev; */
+	/* } */
 
 	deferred_bio_add_workqueue =
 		alloc_workqueue("pci_rbd_bio_add", WQ_UNBOUND, 1);
@@ -345,8 +374,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->gd->queue->queuedata = rdev;
 
 	snprintf(rdev->gd->disk_name, 32, "pci_rbd");
-	set_capacity(rdev->gd,
-		     get_capacity(bdev_whole(rdev->real_bd)->bd_disk));
+	set_capacity(rdev->gd, (1024 * 1024 * 1024)/512);
 	device_add_disk(dev, rdev->gd, NULL);
 	return 0;
 out_tag_set:
