@@ -112,6 +112,9 @@ static void deferred_bio_work_func(struct work_struct *work)
 	struct pci_remote_block_device *rdev = rb_req->rdev;
 
 	struct bio *bio_src;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+
 	rb_req->num_bios = 0;
 
 	__rq_for_each_bio (bio_src, rq) {
@@ -139,6 +142,7 @@ static void pci_rbd_transfer_complete(struct bio *bio)
 	struct pci_remote_bd_request *rbd = bio->bi_private;
 
 	struct request *req = blk_mq_rq_from_pdu(rbd);
+
 	if (--rbd->num_bios == 0) {
 		pci_rbd_unmap_data(rbd);
 		blk_mq_complete_request(req);
@@ -175,7 +179,7 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct pci_remote_block_device *rdev = hctx->queue->queuedata;
 	struct pci_remote_bd_request *rb_req = blk_mq_rq_to_pdu(bd->rq);
 	int num;
-
+	
 	rb_req->rdev = rdev;
 	blk_mq_start_request(bd->rq);
 	num = pci_rbd_map_data(hctx, bd->rq, rb_req);
