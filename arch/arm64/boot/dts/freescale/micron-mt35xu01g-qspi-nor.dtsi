@@ -15,6 +15,11 @@
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
 			#size-cells = <1>;
+			
+			flashimage@0 {
+				label = "Flash-Image";
+				reg = <0x0 0x8000000>;
+			};
 
 			m7_bl@0 {
 				label = "M7-BL";
