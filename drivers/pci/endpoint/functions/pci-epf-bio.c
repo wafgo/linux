@@ -2,8 +2,8 @@
 /*
  * Test driver to test endpoint functionality
  *
- * Copyright (C) 2017 Texas Instruments
- * Author: Kishon Vijay Abraham I <kishon@ti.com>
+ * Copyright (C) 2023 Continental Automotive Technologies
+ * Author: Wadim Mueller <wadim.mueller@continental.com>
  */
 
 #include <linux/crc32.h>
@@ -18,6 +18,11 @@
 #include <linux/pci-epc.h>
 #include <linux/pci-epf.h>
 #include <linux/pci_regs.h>
+
+#include <linux/bvec.h>
+
+
+#define NUM_DESRIPTORS                  512
 
 #define IRQ_TYPE_LEGACY			0
 #define IRQ_TYPE_MSI			1
@@ -47,26 +52,49 @@
 
 static struct workqueue_struct *kpcibio_workqueue;
 
+struct pci_epf_bio_descr {
+    sector_t s_sector; /* start sector of the request */
+    u64 addr; /* where the data is  */
+    u32 num_sectors; /* num of sectors*/
+    u32 s_offset;  /* offset from the s_sector */
+};
+
+struct pci_bio_driver_ring {
+    u16 flags;
+    u16 idx;
+    u16 ring[]; /* queue size*/
+};
+
+struct pci_bio_device_ring {
+    u16 flags;
+    u32 len;
+    u16 idx;
+    u16 ring[]; /* queue size*/
+};
+
 struct pci_epf_bio {
 	void			*reg[PCI_STD_NUM_BARS];
 	struct pci_epf		*epf;
-	enum pci_barno		test_reg_bar;
+	enum pci_barno		bio_reg_bar;
 	size_t			msix_table_offset;
 	struct delayed_work	cmd_handler;
 	struct dma_chan		*dma_chan;
 	struct completion	transfer_complete;
 	bool			dma_supported;
 	const struct pci_epc_features *epc_features;
+        struct pci_epf_bio_descr *descr;
+        u32 drv_offset;
+        u32 dev_offset;
 };
 
 struct pci_epf_bio_reg {
 	u32	magic;
 	u32	command;
 	u32	status;
-	u64	src_addr;
-	u64	dst_addr;
-	u32	size;
-	u32	checksum;
+        u64	queue_addr;  /* start of struct pci_epf_bio_descr*/
+        u32     queue_size;  /* number of struct pci_epf_bio_descr */
+        u32     drv_offset;
+        u32     dev_offset;
 	u32	irq_type;
 	u32	irq_number;
 	u32	flags;
@@ -239,8 +267,8 @@ static int pci_epf_bio_copy(struct pci_epf_bio *epf_bio)
 	struct pci_epf *epf = epf_bio->epf;
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[test_reg_bar];
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
+	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 
 	src_addr = pci_epc_mem_alloc_addr(epc, &src_phys_addr, reg->size);
 	if (!src_addr) {
@@ -279,7 +307,7 @@ static int pci_epf_bio_copy(struct pci_epf_bio *epf_bio)
 		src_phys_addr, dst_phys_addr);
 	dev_info(dev,
 		"\nCOPY => Using BAR:%d\tSize: %u bytes\n",
-		test_reg_bar, reg->size);
+		bio_reg_bar, reg->size);
 
 	ktime_get_ts64(&start);
 	/* Only DMA Engine transfers supported for the COPY test */
@@ -343,8 +371,8 @@ static int pci_epf_bio_read(struct pci_epf_bio *epf_bio)
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
 	struct device *dma_dev = epf->epc->dev.parent;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[test_reg_bar];
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
+	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 	bool show_stats = true;
 
 	src_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
@@ -371,7 +399,7 @@ static int pci_epf_bio_read(struct pci_epf_bio *epf_bio)
 
 	dev_info(dev, "\nREAD => Src Address: 0x%llX\n", phys_addr);
 	dev_info(dev, "\nREAD => Using BAR:%d\tSize: %u bytes\n",
-		test_reg_bar, reg->size);
+		bio_reg_bar, reg->size);
 
 	/* Select one type of DMA test, the regular DMA Engine based or
 	 * the simple, more limited single DMA transfer.
@@ -467,8 +495,8 @@ static int pci_epf_bio_write(struct pci_epf_bio *epf_bio)
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
 	struct device *dma_dev = epf->epc->dev.parent;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[test_reg_bar];
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
+	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 	bool show_stats = true;
 
 	dst_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
@@ -495,7 +523,7 @@ static int pci_epf_bio_write(struct pci_epf_bio *epf_bio)
 
 	dev_info(dev, "\nWRITE => Dest Address: 0x%llX\n", phys_addr);
 	dev_info(dev, "\nWRITE => Using BAR:%d\tSize: %u bytes\n",
-		test_reg_bar, reg->size);
+		bio_reg_bar, reg->size);
 
 	get_random_bytes(buf, reg->size);
 	reg->checksum = crc32_le(~0, buf, reg->size);
@@ -585,8 +613,8 @@ static void pci_epf_bio_raise_irq(struct pci_epf_bio *epf_bio, u8 irq_type,
 	struct pci_epf *epf = epf_bio->epf;
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[test_reg_bar];
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
+	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 
 	reg->status |= STATUS_IRQ_RAISED;
 
@@ -619,8 +647,8 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	struct pci_epf *epf = epf_bio->epf;
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[test_reg_bar];
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
+	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 
 	command = reg->command;
 	if (!command)
@@ -728,12 +756,12 @@ static int pci_epf_bio_set_bar(struct pci_epf *epf)
 	struct pci_epc *epc = epf->epc;
 	struct device *dev = &epf->dev;
 	struct pci_epf_bio *epf_bio = epf_get_drvdata(epf);
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
 	const struct pci_epc_features *epc_features;
 
 	epc_features = epf_bio->epc_features;
 
-	dev_info(dev, "Setting test BAR%d\n", test_reg_bar);
+	dev_info(dev, "Setting test BAR%d\n", bio_reg_bar);
 
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar += add) {
 		epf_bar = &epf->bar[bar];
@@ -753,7 +781,7 @@ static int pci_epf_bio_set_bar(struct pci_epf *epf)
 			pci_epf_free_space(epf, epf_bio->reg[bar], bar,
 					   PRIMARY_INTERFACE);
 			dev_err(dev, "Failed to set BAR%d\n", bar);
-			if (bar == test_reg_bar)
+			if (bar == bio_reg_bar)
 				return ret;
 		}
 	}
@@ -807,7 +835,7 @@ static int pci_epf_bio_core_init(struct pci_epf *epf)
 		dev_info(dev, "Configuring MSI-Xs\n");
 		ret = pci_epc_set_msix(epc, epf->func_no, epf->vfunc_no,
 				       epf->msix_interrupts,
-				       epf_bio->test_reg_bar,
+				       epf_bio->bio_reg_bar,
 				       epf_bio->msix_table_offset);
 		if (ret) {
 			dev_err(dev, "MSI-X configuration failed\n");
@@ -851,47 +879,47 @@ static int pci_epf_bio_alloc_space(struct pci_epf *epf)
 	struct device *dev = &epf->dev;
 	struct pci_epf_bar *epf_bar;
 	size_t msix_table_size = 0;
-	size_t test_reg_bar_size;
+	size_t bio_reg_bar_size;
 	size_t pba_size = 0;
 	bool msix_capable;
 	void *base;
 	int bar, add;
-	enum pci_barno test_reg_bar = epf_bio->test_reg_bar;
+	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
 	const struct pci_epc_features *epc_features;
 	size_t test_reg_size;
 
 	epc_features = epf_bio->epc_features;
 
-	test_reg_bar_size = ALIGN(sizeof(struct pci_epf_bio_reg), 128);
+	bio_reg_bar_size = ALIGN(sizeof(struct pci_epf_bio_reg), 128);
 
 	msix_capable = epc_features->msix_capable;
 	if (msix_capable) {
 		msix_table_size = PCI_MSIX_ENTRY_SIZE * epf->msix_interrupts;
-		epf_bio->msix_table_offset = test_reg_bar_size;
+		epf_bio->msix_table_offset = bio_reg_bar_size;
 		/* Align to QWORD or 8 Bytes */
 		pba_size = ALIGN(DIV_ROUND_UP(epf->msix_interrupts, 8), 8);
 	}
-	test_reg_size = test_reg_bar_size + msix_table_size + pba_size;
+	test_reg_size = bio_reg_bar_size + msix_table_size + pba_size;
 
-	if (epc_features->bar_fixed_size[test_reg_bar]) {
-		if (test_reg_size > bar_size[test_reg_bar])
+	if (epc_features->bar_fixed_size[bio_reg_bar]) {
+		if (test_reg_size > bar_size[bio_reg_bar])
 			return -ENOMEM;
-		test_reg_size = bar_size[test_reg_bar];
+		test_reg_size = bar_size[bio_reg_bar];
 	}
 
-	base = pci_epf_alloc_space(epf, test_reg_size, test_reg_bar,
+	base = pci_epf_alloc_space(epf, test_reg_size, bio_reg_bar,
 				   epc_features->align, PRIMARY_INTERFACE);
 	if (!base) {
 		dev_err(dev, "Failed to allocated register space\n");
 		return -ENOMEM;
 	}
-	epf_bio->reg[test_reg_bar] = base;
-
+	epf_bio->reg[bio_reg_bar] = base;
+	
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar += add) {
 		epf_bar = &epf->bar[bar];
 		add = (epf_bar->flags & PCI_BASE_ADDRESS_MEM_TYPE_64) ? 2 : 1;
 
-		if (bar == test_reg_bar)
+		if (bar == bio_reg_bar)
 			continue;
 
 		if (!!(epc_features->reserved_bar & (1 << bar)))
@@ -931,11 +959,12 @@ static int pci_epf_bio_bind(struct pci_epf *epf)
 	int ret;
 	struct pci_epf_bio *epf_bio = epf_get_drvdata(epf);
 	const struct pci_epc_features *epc_features;
-	enum pci_barno test_reg_bar = BAR_0;
+	enum pci_barno bio_reg_bar = BAR_0;
 	struct pci_epc *epc = epf->epc;
 	bool linkup_notifier = false;
 	bool core_init_notifier = false;
-
+	struct pci_epf_bio_reg *breg;
+	
 	if (WARN_ON_ONCE(!epc))
 		return -EINVAL;
 
@@ -947,18 +976,23 @@ static int pci_epf_bio_bind(struct pci_epf *epf)
 
 	linkup_notifier = epc_features->linkup_notifier;
 	core_init_notifier = epc_features->core_init_notifier;
-	test_reg_bar = pci_epc_get_first_free_bar(epc_features);
-	if (test_reg_bar < 0)
+	bio_reg_bar = pci_epc_get_first_free_bar(epc_features);
+	if (bio_reg_bar < 0)
 		return -EINVAL;
 	pci_epf_configure_bar(epf, epc_features);
 
-	epf_bio->test_reg_bar = test_reg_bar;
+	epf_bio->bio_reg_bar = bio_reg_bar;
 	epf_bio->epc_features = epc_features;
 
 	ret = pci_epf_bio_alloc_space(epf);
 	if (ret)
 		return ret;
 
+	breg = (struct pci_epf_bio_reg *) epf_bio->reg[bio_reg_bar];
+	breg->queue_size = NUM_DESRIPTORS;
+	breg->dev_offset = epf_bio->dev_offset;
+	breg->drv_offset = epf_bio->drv_offset;
+	
 	if (!core_init_notifier) {
 		ret = pci_epf_bio_core_init(epf);
 		if (ret)
@@ -992,11 +1026,25 @@ static int pci_epf_bio_probe(struct pci_epf *epf)
 {
 	struct pci_epf_bio *epf_bio;
 	struct device *dev = &epf->dev;
-
+	int err;
 	epf_bio = devm_kzalloc(dev, sizeof(*epf_bio), GFP_KERNEL);
 	if (!epf_bio)
 		return -ENOMEM;
 
+	epf_bio->descr = devm_kzalloc(dev,
+				      ALIGN(NUM_DESRIPTORS * sizeof(*epf_bio->descr), 8) +
+				      ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8) +
+				      ALIGN(sizeof(struct pci_bio_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8),
+				      GFP_KERNEL);
+	
+	epf_bio->drv_offset = ALIGN(NUM_DESRIPTORS * sizeof(*epf_bio->descr), 8);
+	epf_bio->dev_offset = epf_bio->drv_offset + ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8);
+	if (!epf_bio->descr) {
+	    dev_err(dev, "Unable to allocate descriptor memory");
+	    err = -ENOMEM;
+	    goto free_bio;
+	}
+	
 	epf->header = &test_header;
 	epf_bio->epf = epf;
 
@@ -1004,6 +1052,9 @@ static int pci_epf_bio_probe(struct pci_epf *epf)
 
 	epf_set_drvdata(epf, epf_bio);
 	return 0;
+free_bio:
+	devm_kfree(dev, epf_bio);
+	return err;
 }
 
 static struct pci_epf_ops ops = {
