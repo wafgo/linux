@@ -114,4 +114,5 @@ ELSE
   Trace.METHOD Onchip
 )
 
+do win.cmm
 ENDDO
