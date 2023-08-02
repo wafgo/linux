@@ -161,3 +161,5 @@ x509.genkey
 
 # Documentation toolchain
 sphinx_*/
+tools/pci/include/linux/pcitest.h
+tools/pci/pcitest
