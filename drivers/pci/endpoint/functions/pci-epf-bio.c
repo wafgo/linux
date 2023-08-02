@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Test driver to test endpoint functionality
+ * Remote Blockdevice as an Endpoint Function driver
  *
  * Copyright (C) 2023 Continental Automotive Technologies
  * Author: Wadim Mueller <wadim.mueller@continental.com>
@@ -31,9 +31,9 @@
 #define COMMAND_RAISE_LEGACY_IRQ	BIT(0)
 #define COMMAND_RAISE_MSI_IRQ		BIT(1)
 #define COMMAND_RAISE_MSIX_IRQ		BIT(2)
-#define COMMAND_READ			BIT(3)
-#define COMMAND_WRITE			BIT(4)
-#define COMMAND_COPY			BIT(5)
+#define COMMAND_WRITE_TO_QUEUE          BIT(4)
+#define COMMAND_READ_FROM_QUEUE         BIT(5)
+#define COMMAND_SET_QUEUE               BIT(6)
 
 #define STATUS_READ_SUCCESS		BIT(0)
 #define STATUS_READ_FAIL		BIT(1)
@@ -44,6 +44,7 @@
 #define STATUS_IRQ_RAISED		BIT(6)
 #define STATUS_SRC_ADDR_INVALID		BIT(7)
 #define STATUS_DST_ADDR_INVALID		BIT(8)
+#define STATUS_QUEUE_ADDR_INVALID	BIT(9)
 
 #define FLAG_USE_DMA			BIT(0)
 #define FLAG_USE_SINGLE_DMA		BIT(1)
@@ -83,6 +84,7 @@ struct pci_epf_bio {
 	bool			dma_supported;
 	const struct pci_epc_features *epc_features;
         struct pci_epf_bio_descr *descr;
+        size_t  descr_size;
         u32 drv_offset;
         u32 dev_offset;
 };
@@ -108,74 +110,6 @@ static struct pci_epf_header test_header = {
 };
 
 static size_t bar_size[] = { 512, 512, 1024, 16384, 131072, 1048576 };
-
-static void pci_epf_bio_dma_callback(void *param)
-{
-	struct pci_epf_bio *epf_bio = param;
-
-	complete(&epf_bio->transfer_complete);
-}
-
-/**
- * pci_epf_bio_data_transfer() - Function that uses dmaengine API to transfer
- *				  data between PCIe EP and remote PCIe RC
- * @epf_bio: the EPF test device that performs the data transfer operation
- * @dma_dst: The destination address of the data transfer. It can be a physical
- *	     address given by pci_epc_mem_alloc_addr or DMA mapping APIs.
- * @dma_src: The source address of the data transfer. It can be a physical
- *	     address given by pci_epc_mem_alloc_addr or DMA mapping APIs.
- * @len: The size of the data transfer
- *
- * Function that uses dmaengine API to transfer data between PCIe EP and remote
- * PCIe RC. The source and destination address can be a physical address given
- * by pci_epc_mem_alloc_addr or the one obtained using DMA mapping APIs.
- *
- * The function returns '0' on success and negative value on failure.
- */
-static int pci_epf_bio_data_transfer(struct pci_epf_bio *epf_bio,
-				      dma_addr_t dma_dst, dma_addr_t dma_src,
-				      size_t len)
-{
-	enum dma_ctrl_flags flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT;
-	struct dma_chan *chan = epf_bio->dma_chan;
-	struct pci_epf *epf = epf_bio->epf;
-	struct dma_async_tx_descriptor *tx;
-	struct device *dev = &epf->dev;
-	dma_cookie_t cookie;
-	int ret;
-
-	if (IS_ERR_OR_NULL(chan)) {
-		dev_err(dev, "Invalid DMA memcpy channel\n");
-		return -EINVAL;
-	}
-
-	tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, len, flags);
-	if (!tx) {
-		dev_err(dev, "Failed to prepare DMA memcpy\n");
-		return -EIO;
-	}
-
-	tx->callback = pci_epf_bio_dma_callback;
-	tx->callback_param = epf_bio;
-	cookie = tx->tx_submit(tx);
-	reinit_completion(&epf_bio->transfer_complete);
-
-	ret = dma_submit_error(cookie);
-	if (ret) {
-		dev_err(dev, "Failed to do DMA tx_submit %d\n", cookie);
-		return -EIO;
-	}
-
-	dma_async_issue_pending(chan);
-	ret = wait_for_completion_interruptible(&epf_bio->transfer_complete);
-	if (ret < 0) {
-		dmaengine_terminate_sync(chan);
-		dev_err(dev, "DMA wait_for_completion_timeout\n");
-		return -ETIMEDOUT;
-	}
-
-	return 0;
-}
 
 /**
  * pci_epf_bio_init_dma_chan() - Function to initialize EPF test DMA channel
@@ -223,423 +157,41 @@ static void pci_epf_bio_clean_dma_chan(struct pci_epf_bio *epf_bio)
 	epf_bio->dma_chan = NULL;
 }
 
-static void pci_epf_bio_print_rate(struct device *dev,
-					const char *ops, u64 size,
-				    struct timespec64 *start,
-				    struct timespec64 *end, bool dma)
-{
-	struct timespec64 ts;
-	u64 rate, ns;
-
-	ts = timespec64_sub(*end, *start);
-
-	/* convert both size (stored in 'rate') and time in terms of 'ns' */
-	ns = timespec64_to_ns(&ts);
-	rate = size * NSEC_PER_SEC;
-
-	/* Divide both size (stored in 'rate') and ns by a common factor */
-	while (ns > UINT_MAX) {
-		rate >>= 1;
-		ns >>= 1;
-	}
-
-	if (!ns)
-		return;
-
-	/* calculate the rate */
-	do_div(rate, (uint32_t)ns);
-
-	dev_info(dev,
-		"\n%s => Size: %llu bytes\t DMA: %s\t Time: %llu.%09u seconds\t"
-		"Rate: %llu KB/s\n", ops, size, dma ? "YES" : "NO",
-		(u64)ts.tv_sec, (u32)ts.tv_nsec, rate / 1024);
-}
-
-static int pci_epf_bio_copy(struct pci_epf_bio *epf_bio)
-{
-	int ret;
-	bool use_dma;
-	void __iomem *src_addr;
-	void __iomem *dst_addr;
-	phys_addr_t src_phys_addr;
-	phys_addr_t dst_phys_addr;
-	struct timespec64 start, end;
-	struct pci_epf *epf = epf_bio->epf;
-	struct device *dev = &epf->dev;
-	struct pci_epc *epc = epf->epc;
-	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
-
-	src_addr = pci_epc_mem_alloc_addr(epc, &src_phys_addr, reg->size);
-	if (!src_addr) {
-		dev_err(dev, "Failed to allocate source address\n");
-		reg->status = STATUS_SRC_ADDR_INVALID;
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, src_phys_addr,
-			       reg->src_addr, reg->size);
-	if (ret) {
-		dev_err(dev, "Failed to map source address\n");
-		reg->status = STATUS_SRC_ADDR_INVALID;
-		goto err_src_addr;
-	}
-
-	dst_addr = pci_epc_mem_alloc_addr(epc, &dst_phys_addr, reg->size);
-	if (!dst_addr) {
-		dev_err(dev, "Failed to allocate destination address\n");
-		reg->status = STATUS_DST_ADDR_INVALID;
-		ret = -ENOMEM;
-		goto err_src_map_addr;
-	}
-
-	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, dst_phys_addr,
-			       reg->dst_addr, reg->size);
-	if (ret) {
-		dev_err(dev, "Failed to map destination address\n");
-		reg->status = STATUS_DST_ADDR_INVALID;
-		goto err_dst_addr;
-	}
-
-	dev_info(dev,
-		"\nCOPY => Src Address: 0x%llX\tDest Address: 0x%llX\n",
-		src_phys_addr, dst_phys_addr);
-	dev_info(dev,
-		"\nCOPY => Using BAR:%d\tSize: %u bytes\n",
-		bio_reg_bar, reg->size);
-
-	ktime_get_ts64(&start);
-	/* Only DMA Engine transfers supported for the COPY test */
-	use_dma = !!(reg->flags & FLAG_USE_DMA);
-	if (use_dma) {
-		if (!epf_bio->dma_supported) {
-			dev_err(dev, "Cannot transfer data using DMA\n");
-			ret = -EINVAL;
-			goto err_map_addr;
-		}
-
-		ret = pci_epf_bio_data_transfer(epf_bio, dst_phys_addr,
-						 src_phys_addr, reg->size);
-		if (ret)
-			dev_err(dev, "Data transfer failed\n");
-	} else {
-		void *buf;
-
-		buf = kzalloc(reg->size, GFP_KERNEL);
-		if (!buf) {
-			ret = -ENOMEM;
-			goto err_map_addr;
-		}
-
-		memcpy_fromio(buf, src_addr, reg->size);
-		memcpy_toio(dst_addr, buf, reg->size);
-		kfree(buf);
-	}
-
-	ktime_get_ts64(&end);
-	pci_epf_bio_print_rate(dev, "COPY", reg->size,
-		&start, &end, use_dma);
-
-err_map_addr:
-	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, dst_phys_addr);
-
-err_dst_addr:
-	pci_epc_mem_free_addr(epc, dst_phys_addr, dst_addr, reg->size);
-
-err_src_map_addr:
-	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, src_phys_addr);
-
-err_src_addr:
-	pci_epc_mem_free_addr(epc, src_phys_addr, src_addr, reg->size);
-
-err:
-	return ret;
-}
-
-static int pci_epf_bio_read(struct pci_epf_bio *epf_bio)
-{
-	int ret;
-	void __iomem *src_addr;
-	void *buf;
-	u32 crc32;
-	bool use_dma, use_single_dma;
+static int pci_epf_bio_map_queue(struct pci_epf_bio *epf_bio, struct pci_epf_bio_reg *reg) {
+        int ret;
+	void __iomem *addr;
 	phys_addr_t phys_addr;
-	phys_addr_t dst_phys_addr;
-	struct timespec64 start, end;
 	struct pci_epf *epf = epf_bio->epf;
 	struct device *dev = &epf->dev;
 	struct pci_epc *epc = epf->epc;
-	struct device *dma_dev = epf->epc->dev.parent;
-	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
-	bool show_stats = true;
 
-	src_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
-	if (!src_addr) {
-		dev_err(dev, "Failed to allocate address\n");
-		reg->status = STATUS_SRC_ADDR_INVALID;
-		ret = -ENOMEM;
-		goto err;
+	addr = pci_epc_mem_alloc_addr(epc, &phys_addr, epf_bio->descr_size);
+	if (!addr) {
+		dev_err(dev, "Failed to allocate queue address\n");
+		reg->status = STATUS_QUEUE_ADDR_INVALID;
+		return -ENOMEM;
 	}
 
 	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, phys_addr,
-			       reg->src_addr, reg->size);
+			       reg->queue_addr, epf_bio->descr_size);
 	if (ret) {
-		dev_err(dev, "Failed to map address\n");
-		reg->status = STATUS_SRC_ADDR_INVALID;
-		goto err_addr;
+		dev_err(dev, "Failed to map queue address\n");
+		reg->status = STATUS_QUEUE_ADDR_INVALID;
+		ret = -EINVAL;
+		goto err_queue_addr;
 	}
 
-	buf = kzalloc(reg->size, GFP_KERNEL);
-	if (!buf) {
-		ret = -ENOMEM;
-		goto err_map_addr;
-	}
-
-	dev_info(dev, "\nREAD => Src Address: 0x%llX\n", phys_addr);
-	dev_info(dev, "\nREAD => Using BAR:%d\tSize: %u bytes\n",
-		bio_reg_bar, reg->size);
-
-	/* Select one type of DMA test, the regular DMA Engine based or
-	 * the simple, more limited single DMA transfer.
-	 * In case both are selected, use the second.
-	 */
-	use_single_dma = !!(reg->flags & FLAG_USE_SINGLE_DMA);
-	use_dma = !!(reg->flags & FLAG_USE_DMA) && (!use_single_dma);
-
-	if (use_dma || use_single_dma) {
-		if (use_dma && !epf_bio->dma_supported) {
-			dev_err(dev, "Cannot transfer data using selected DMA\n");
-			ret = -EINVAL;
-			goto err_dma_map;
-		}
-
-		dst_phys_addr = dma_map_single(dma_dev, buf, reg->size,
-					       DMA_FROM_DEVICE);
-		if (dma_mapping_error(dma_dev, dst_phys_addr)) {
-			dev_err(dev, "Failed to map destination buffer addr\n");
-			ret = -ENOMEM;
-			goto err_dma_map;
-		}
-
-		ktime_get_ts64(&start);
-		if (use_dma)
-			ret = pci_epf_bio_data_transfer(
-						 epf_bio, dst_phys_addr,
-						 phys_addr, reg->size);
-
-		if (use_single_dma) {
-			reinit_completion(&epf_bio->transfer_complete);
-			ret = pci_epc_start_single_dma(epc, epf->func_no,
-					epf->vfunc_no, 1,
-					phys_addr, dst_phys_addr, reg->size,
-					&epf_bio->transfer_complete);
-			if (ret) {
-				dev_err(dev, "Failed to start single DMA read\n");
-			} else {
-				ret = wait_for_completion_interruptible(
-					&epf_bio->transfer_complete);
-				if (ret < 0)
-					dev_err(dev, "DMA wait_for_completion_timeout\n");
-			}
-		}
-
-		if (ret) {
-			dev_err(dev, "Data transfer failed\n");
-			show_stats = false;
-		}
-		ktime_get_ts64(&end);
-
-		dma_unmap_single(dma_dev, dst_phys_addr, reg->size,
-				 DMA_FROM_DEVICE);
-	} else {
-		ktime_get_ts64(&start);
-		memcpy_fromio(buf, src_addr, reg->size);
-		ktime_get_ts64(&end);
-	}
-
-	if (show_stats)
-		pci_epf_bio_print_rate(dev, "READ", reg->size, &start, &end,
-			use_dma || use_single_dma);
-
-	crc32 = crc32_le(~0, buf, reg->size);
-	if (crc32 != reg->checksum) {
-		dev_err(dev, "Checksums do not match\n");
-		ret = -EIO;
-	}
-
-err_dma_map:
-	kfree(buf);
-
-err_map_addr:
-	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, phys_addr);
-
-err_addr:
-	pci_epc_mem_free_addr(epc, phys_addr, src_addr, reg->size);
-
-err:
+	epf_bio->descr = addr;
+	dev_err(dev, "\tQUEUE => Queue Address physical: 0x%llX\t Queue Address virt: 0x%llX\t Queue Addr PCI: 0x%llX\n",
+		phys_addr, addr, reg->queue_addr);
+	return 0;
+err_queue_addr:
+	pci_epc_mem_free_addr(epc, phys_addr, addr, epf_bio->descr_size);
 	return ret;
-}
-
-static int pci_epf_bio_write(struct pci_epf_bio *epf_bio)
-{
-	int ret;
-	void __iomem *dst_addr;
-	void *buf;
-	bool use_dma, use_single_dma;
-	phys_addr_t phys_addr;
-	phys_addr_t src_phys_addr;
-	struct timespec64 start, end;
-	struct pci_epf *epf = epf_bio->epf;
-	struct device *dev = &epf->dev;
-	struct pci_epc *epc = epf->epc;
-	struct device *dma_dev = epf->epc->dev.parent;
-	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
-	bool show_stats = true;
-
-	dst_addr = pci_epc_mem_alloc_addr(epc, &phys_addr, reg->size);
-	if (!dst_addr) {
-		dev_err(dev, "Failed to allocate address\n");
-		reg->status = STATUS_DST_ADDR_INVALID;
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, phys_addr,
-			       reg->dst_addr, reg->size);
-	if (ret) {
-		dev_err(dev, "Failed to map address\n");
-		reg->status = STATUS_DST_ADDR_INVALID;
-		goto err_addr;
-	}
-
-	buf = kzalloc(reg->size, GFP_KERNEL);
-	if (!buf) {
-		ret = -ENOMEM;
-		goto err_map_addr;
-	}
-
-	dev_info(dev, "\nWRITE => Dest Address: 0x%llX\n", phys_addr);
-	dev_info(dev, "\nWRITE => Using BAR:%d\tSize: %u bytes\n",
-		bio_reg_bar, reg->size);
-
-	get_random_bytes(buf, reg->size);
-	reg->checksum = crc32_le(~0, buf, reg->size);
-
-	/* Select one type of DMA test, the regular DMA Engine based or
-	 * the simple, more limited single DMA transfer.
-	 * In case both are selected, use the second.
-	 */
-	use_single_dma = !!(reg->flags & FLAG_USE_SINGLE_DMA);
-	use_dma = !!(reg->flags & FLAG_USE_DMA) && (!use_single_dma);
-
-	if (use_dma || use_single_dma) {
-		if (use_dma && !epf_bio->dma_supported) {
-			dev_err(dev, "Cannot transfer data using selected DMA\n");
-			ret = -EINVAL;
-			goto err_dma_map;
-		}
-
-		src_phys_addr = dma_map_single(dma_dev, buf, reg->size,
-					       DMA_TO_DEVICE);
-		if (dma_mapping_error(dma_dev, src_phys_addr)) {
-			dev_err(dev, "Failed to map source buffer addr\n");
-			ret = -ENOMEM;
-			goto err_dma_map;
-		}
-
-		ktime_get_ts64(&start);
-		if (use_dma)
-			ret = pci_epf_bio_data_transfer(
-						 epf_bio, phys_addr,
-						 src_phys_addr, reg->size);
-		if (use_single_dma) {
-			reinit_completion(&epf_bio->transfer_complete);
-			ret = pci_epc_start_single_dma(epc, epf->func_no,
-					epf->vfunc_no, 0,
-					src_phys_addr, phys_addr, reg->size,
-					&epf_bio->transfer_complete);
-			if (ret) {
-				dev_err(dev, "Failed to start single DMA write\n");
-			} else {
-				ret = wait_for_completion_interruptible(
-					&epf_bio->transfer_complete);
-				if (ret < 0)
-					dev_err(dev, "DMA wait_for_completion_timeout\n");
-			}
-		}
-		if (ret) {
-			dev_err(dev, "Data transfer failed\n");
-			show_stats = false;
-		}
-		ktime_get_ts64(&end);
-
-		dma_unmap_single(dma_dev, src_phys_addr, reg->size,
-				 DMA_TO_DEVICE);
-	} else {
-		ktime_get_ts64(&start);
-		memcpy_toio(dst_addr, buf, reg->size);
-		ktime_get_ts64(&end);
-	}
-
-	if (show_stats)
-		pci_epf_bio_print_rate(dev, "WRITE", reg->size, &start, &end,
-			use_dma || use_single_dma);
-
-	/*
-	 * wait 1ms inorder for the write to complete. Without this delay L3
-	 * error in observed in the host system.
-	 */
-	usleep_range(1000, 2000);
-
-err_dma_map:
-	kfree(buf);
-
-err_map_addr:
-	pci_epc_unmap_addr(epc, epf->func_no, epf->vfunc_no, phys_addr);
-
-err_addr:
-	pci_epc_mem_free_addr(epc, phys_addr, dst_addr, reg->size);
-
-err:
-	return ret;
-}
-
-static void pci_epf_bio_raise_irq(struct pci_epf_bio *epf_bio, u8 irq_type,
-				   u16 irq)
-{
-	struct pci_epf *epf = epf_bio->epf;
-	struct device *dev = &epf->dev;
-	struct pci_epc *epc = epf->epc;
-	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
-	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
-
-	reg->status |= STATUS_IRQ_RAISED;
-
-	switch (irq_type) {
-	case IRQ_TYPE_LEGACY:
-		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
-				  PCI_EPC_IRQ_LEGACY, 0);
-		break;
-	case IRQ_TYPE_MSI:
-		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
-				  PCI_EPC_IRQ_MSI, irq);
-		break;
-	case IRQ_TYPE_MSIX:
-		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
-				  PCI_EPC_IRQ_MSIX, irq);
-		break;
-	default:
-		dev_err(dev, "Failed to raise IRQ, unknown type\n");
-		break;
-	}
 }
 
 static void pci_epf_bio_cmd_handler(struct work_struct *work)
 {
-	int ret;
 	int count;
 	u32 command;
 	struct pci_epf_bio *epf_bio = container_of(work, struct pci_epf_bio,
@@ -649,59 +201,39 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	struct pci_epc *epc = epf->epc;
 	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
 	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
-
+	struct pci_epf_bio_descr *descr;
 	command = reg->command;
 	if (!command)
 		goto reset_handler;
 
+
+	dev_err(dev, "-> reg: magic: 0x%x\n", reg->magic);
+	dev_err(dev, "-> reg: command: 0x%x\n", reg->command);
+	dev_err(dev, "-> reg: status: 0x%x\n", reg->status);
+
 	reg->command = 0;
 	reg->status = 0;
+	reg->magic = 0xd00dfeed;
 
 	if (reg->irq_type > IRQ_TYPE_MSIX) {
 		dev_err(dev, "Failed to detect IRQ type\n");
 		goto reset_handler;
 	}
 
-	if (command & COMMAND_RAISE_LEGACY_IRQ) {
-		reg->status = STATUS_IRQ_RAISED;
-		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no,
-				  PCI_EPC_IRQ_LEGACY, 0);
-		goto reset_handler;
+	if (command & COMMAND_SET_QUEUE) {
+	    dev_err(dev, "-> Mapping QUEUE to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, epf_bio->descr_size);
+	    pci_epf_bio_map_queue(epf_bio, reg);
 	}
 
-	if (command & COMMAND_WRITE) {
-		ret = pci_epf_bio_write(epf_bio);
-		if (ret)
-			reg->status |= STATUS_WRITE_FAIL;
-		else
-			reg->status |= STATUS_WRITE_SUCCESS;
-		pci_epf_bio_raise_irq(epf_bio, reg->irq_type,
-				       reg->irq_number);
-		goto reset_handler;
+	if (command & COMMAND_WRITE_TO_QUEUE) {
+	    dev_err(dev, "-> WRITING to QUEUE to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, epf_bio->descr_size);
+	    descr = epf_bio->descr;
+	    descr->num_sectors = 0xa0;
+	    descr->addr = 0xa5a5a5a5;
+	    descr->s_offset = 0x5a;
+	    descr->s_sector = 0xa5;
 	}
-
-	if (command & COMMAND_READ) {
-		ret = pci_epf_bio_read(epf_bio);
-		if (!ret)
-			reg->status |= STATUS_READ_SUCCESS;
-		else
-			reg->status |= STATUS_READ_FAIL;
-		pci_epf_bio_raise_irq(epf_bio, reg->irq_type,
-				       reg->irq_number);
-		goto reset_handler;
-	}
-
-	if (command & COMMAND_COPY) {
-		ret = pci_epf_bio_copy(epf_bio);
-		if (!ret)
-			reg->status |= STATUS_COPY_SUCCESS;
-		else
-			reg->status |= STATUS_COPY_FAIL;
-		pci_epf_bio_raise_irq(epf_bio, reg->irq_type,
-				       reg->irq_number);
-		goto reset_handler;
-	}
-
+	
 	if (command & COMMAND_RAISE_MSI_IRQ) {
 		count = pci_epc_get_msi(epc, epf->func_no, epf->vfunc_no);
 		if (reg->irq_number > count || count <= 0)
@@ -734,6 +266,7 @@ static void pci_epf_bio_unbind(struct pci_epf *epf)
 	struct pci_epf_bar *epf_bar;
 	int bar;
 
+	dev_err(&epf->dev, "%s called\n", __FUNCTION__);
 	cancel_delayed_work(&epf_bio->cmd_handler);
 	pci_epf_bio_clean_dma_chan(epf_bio);
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
@@ -964,7 +497,8 @@ static int pci_epf_bio_bind(struct pci_epf *epf)
 	bool linkup_notifier = false;
 	bool core_init_notifier = false;
 	struct pci_epf_bio_reg *breg;
-	
+
+	dev_err(&epf->dev, "%s called\n", __FUNCTION__);
 	if (WARN_ON_ONCE(!epc))
 		return -EINVAL;
 
@@ -1026,35 +560,24 @@ static int pci_epf_bio_probe(struct pci_epf *epf)
 {
 	struct pci_epf_bio *epf_bio;
 	struct device *dev = &epf->dev;
-	int err;
 	epf_bio = devm_kzalloc(dev, sizeof(*epf_bio), GFP_KERNEL);
 	if (!epf_bio)
 		return -ENOMEM;
 
-	epf_bio->descr = devm_kzalloc(dev,
-				      ALIGN(NUM_DESRIPTORS * sizeof(*epf_bio->descr), 8) +
-				      ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8) +
-				      ALIGN(sizeof(struct pci_bio_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8),
-				      GFP_KERNEL);
+	epf_bio->descr_size = ALIGN(NUM_DESRIPTORS * sizeof(*epf_bio->descr), 8) +
+				    ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8) +
+	                            ALIGN(sizeof(struct pci_bio_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8);
 	
 	epf_bio->drv_offset = ALIGN(NUM_DESRIPTORS * sizeof(*epf_bio->descr), 8);
 	epf_bio->dev_offset = epf_bio->drv_offset + ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), 8);
-	if (!epf_bio->descr) {
-	    dev_err(dev, "Unable to allocate descriptor memory");
-	    err = -ENOMEM;
-	    goto free_bio;
-	}
-	
 	epf->header = &test_header;
 	epf_bio->epf = epf;
 
 	INIT_DELAYED_WORK(&epf_bio->cmd_handler, pci_epf_bio_cmd_handler);
 
 	epf_set_drvdata(epf, epf_bio);
+	dev_err(dev, "%s called\n", __FUNCTION__);
 	return 0;
-free_bio:
-	devm_kfree(dev, epf_bio);
-	return err;
 }
 
 static struct pci_epf_ops ops = {

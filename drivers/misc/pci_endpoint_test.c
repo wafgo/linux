@@ -1023,6 +1023,9 @@ static const struct pci_device_id pci_endpoint_test_tbl[] = {
 	{ PCI_DEVICE(0x0, PCI_DEVICE_ID_S32G3),
 	  .driver_data = (kernel_ulong_t)&s32cc_data,
 	},
+	{ PCI_DEVICE(0x0, 0xb400),
+	  .driver_data = (kernel_ulong_t)&s32cc_data,
+	},
 	{ PCI_DEVICE_DATA(SYNOPSYS, EDDA, NULL) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_TI, PCI_DEVICE_ID_TI_AM654),
 	  .driver_data = (kernel_ulong_t)&am654_data
