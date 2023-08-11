@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Copyright 2022 Continental Automotive GmbH
+ */
+
+&qspi {
+	micron_memory: mt35xu01g@0 {
+		compatible = "jedec,spi-nor";
+		spi-max-frequency = <200000000>;
+		spi-tx-bus-width = <8>;
+		spi-rx-bus-width = <8>;
+		reg = <0>;
+		force-soft-reset;
+		inverted-cmd-ext;
+		memory-default-octal-dtr;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			
+			flashimage@0 {
+				label = "Flash-Image";
+				reg = <0x0 0x8000000>;
+			};
+
+			m7_bl@0 {
+				label = "M7-BL";
+				reg = <0x0 0x80000>;
+			};
+
+			m7_car@100000 {
+				label = "M7-CAR";
+				reg = <0x100000 0x300000>;
+			};
+
+			pfe@800000 {
+				label = "PFE-Firmware";
+				reg = <0x800000 0x100000>;
+			};
+
+			kernel@900000 {
+				label = "Kernel";
+				reg = <0x900000 0xF00000>;
+			};
+
+			dtb@1700000 {
+				label = "DTB";
+				reg = <0x1800000 0x100000>;
+			};
+
+			boot-env@1800000 {
+				label = "U-Boot-Env";
+				reg = <0x1900000 0x10000>;
+			};
+
+			fip@1810000 {
+				label = "FIP";
+				reg = <0x1910000 0x300000>;
+			};
+						
+
+			rootfs@5e40000 {
+				label = "Rootfs";
+				reg = <0x5e40000 0x21C0000>;
+			};
+		};
+	};
+};
