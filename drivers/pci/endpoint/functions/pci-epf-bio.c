@@ -255,7 +255,7 @@ static int pci_epf_bio_map_queue(struct pci_epf_bio *epf_bio, struct pci_epf_bio
 	struct pci_epc *epc = epf->epc;
 
 	addr = pci_epc_mem_alloc_addr(epc, &phys_addr, epf_bio->descr_size);
-	dev_info(dev, "pci_epc_mem_alloc_addr() phys_addr = 0x%llX, size = 0x%x, virt_addr = 0x%llX\n", phys_addr, epf_bio->descr_size, addr);
+	dev_dbg(dev, "pci_epc_mem_alloc_addr() phys_addr = 0x%llX, size = 0x%x, virt_addr = 0x%llX\n", phys_addr, epf_bio->descr_size, addr);
 	if (!addr) {
 		dev_err(dev, "Failed to allocate queue address\n");
 		reg->status = STATUS_QUEUE_ADDR_INVALID;
@@ -264,7 +264,7 @@ static int pci_epf_bio_map_queue(struct pci_epf_bio *epf_bio, struct pci_epf_bio
 
 	ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, phys_addr,
 			       epf_bio->descr_addr, epf_bio->descr_size);
-	dev_info(dev, "pci_epc_map_addr() func_no = %i, vfunc_no = %i, descr_addr = 0x%llX size = 0x%x\n", epf->func_no, epf->vfunc_no, epf_bio->descr_addr, epf_bio->descr_size);
+	dev_dbg(dev, "pci_epc_map_addr() func_no = %i, vfunc_no = %i, descr_addr = 0x%llX size = 0x%x\n", epf->func_no, epf->vfunc_no, epf_bio->descr_addr, epf_bio->descr_size);
 	
 	if (ret) {
 		dev_err(dev, "Failed to map queue address\n");
@@ -318,26 +318,24 @@ static void pci_epf_parked(struct pci_epf_bio *epf_bio)
     reg->status = 0;
 
     if (command & COMMAND_ADD_DRV_ENTRY) {
-	dev_info(dev, "-> Received new driver entry\n");
+	dev_dbg(dev, "-> Received new driver entry\n");
 	drv_ring = get_driver_ring(epf_bio);
-	dev_info(dev, "Received new index = %i\n", drv_ring->idx);
+	dev_dbg(dev, "Received new index = %i\n", drv_ring->idx);
     }
 
     	
     if (command & COMMAND_WRITE_TO_QUEUE) {
-	dev_info(dev, "-> WRITING to QUEUE to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, reg->queue_size);
 	for (i = 0; i < 16; ++i) {
 	    descr = &epf_bio->descr[i];
 	    descr->addr = 0xa5a5a5a5 + i;
 	    descr->s_sector = 0xa5;
 	    descr->offset = 0x5a;
 	    descr->len = 0x5a;
-	    dev_info(dev, "---> written to descr @ addr 0x%llX\n", (u64)descr);
 	}
     }
 	
     if (command & COMMAND_SET_QUEUE) {
-	dev_err(dev, "-> Mapping QUEUE to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, reg->queue_size);
+	dev_dbg(dev, "mapping QUEUE to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, reg->queue_size);
 	if (epf_bio->descr_addr != 0) {
 	    dev_err(dev, "QUEUE is already mapped... 0x%llX\n", epf_bio->descr_addr);
 	    goto reset_handler;
@@ -350,7 +348,7 @@ static void pci_epf_parked(struct pci_epf_bio *epf_bio)
     }
 
     if (command & COMMAND_START) {
-	dev_err(dev, "-> STARTING UP\n");
+	dev_dbg(dev, "STARTING UP\n");
 	if (epf_bio->descr_addr == 0) {
 	    dev_err(dev, "QUEUE is not mapped, cannot start anything\n");
 	    goto reset_handler;
@@ -366,7 +364,9 @@ struct pci_epf_bio_info {
     struct pci_epf_bio *epf_bio;
     struct page *page;
     size_t page_order;
+    size_t size;
     struct bio *bio;
+    struct work_struct	cleanup_work;
     struct pci_epf_bio_descr __iomem *descr;
     int descr_idx;
     void __iomem *addr;
@@ -377,9 +377,15 @@ struct pci_epf_bio_info {
 
 void free_epf_bio_info(struct pci_epf_bio_info *info)
 {
+    struct device *dev = &info->epf_bio->epf->dev;
+    
+    bio_put(info->bio);
+    pci_epc_unmap_addr(info->epf_bio->epf->epc, info->epf_bio->epf->func_no, info->epf_bio->epf->vfunc_no, info->phys_addr);
+    pci_epc_mem_free_addr(info->epf_bio->epf->epc, info->phys_addr, info->addr, info->size);
     __free_pages(info->page, info->page_order);
     /* bio_put() needed?*/
-    kfree(info);
+    /* This is kind of cool. We also free the work_struct which we use to run this function, but thats OK for the kernel!*/
+    devm_kfree(dev, info);
 }
 
 struct pci_epf_bio_info *alloc_pci_epf_bio_info(struct pci_epf_bio *epf_bio, size_t size, struct pci_epf_bio_descr __iomem *descr, int descr_idx)
@@ -401,6 +407,7 @@ struct pci_epf_bio_info *alloc_pci_epf_bio_info(struct pci_epf_bio *epf_bio, siz
 	return NULL;
     }
 
+    binfo->size = size;
     binfo->page_order = get_order(size);
     page = alloc_pages(GFP_KERNEL, binfo->page_order);
     if (unlikely(!page)) {
@@ -414,8 +421,9 @@ struct pci_epf_bio_info *alloc_pci_epf_bio_info(struct pci_epf_bio *epf_bio, siz
 	return NULL;
     }
 
-    dev_info(dev, "%s: pci_epc_mem_alloc_addr() phys_addr = 0x%llX, size = 0x%x, virt_addr = 0x%llX\n", __FUNCTION__, binfo->phys_addr, size, binfo->addr);
+    dev_dbg(dev, "%s: pci_epc_mem_alloc_addr() phys_addr = 0x%llX, size = 0x%x, virt_addr = 0x%llX\n", __FUNCTION__, binfo->phys_addr, size, binfo->addr);
 
+    bio_get(bio);
     binfo->bio = bio;
     binfo->epf_bio = epf_bio;
     binfo->page = page;
@@ -424,39 +432,52 @@ struct pci_epf_bio_info *alloc_pci_epf_bio_info(struct pci_epf_bio *epf_bio, siz
     return binfo;
 }
 
+static void pci_epf_bio_cleanup_handler(struct work_struct *work)
+{
+    static struct pci_bio_device_ring *dev_ring;
+    struct pci_epf_bio_info *binfo = container_of(work, struct pci_epf_bio_info, cleanup_work);
+    struct device *dev = &binfo->epf_bio->epf->dev;
+    char *buffer = kmap_atomic(binfo->page);
+    int ret;
+    
+    dev_dbg(dev, "%s: func_no: %i, vfunc_no: %i, descr: 0x%llX", __FUNCTION__, binfo->epf_bio->epf->func_no, binfo->epf_bio->epf->vfunc_no, binfo->descr);
+    ret = pci_epc_map_addr(binfo->epf_bio->epf->epc, binfo->epf_bio->epf->func_no, binfo->epf_bio->epf->vfunc_no, binfo->phys_addr, binfo->descr->addr, binfo->descr->len);
+	
+    if (ret) {
+	dev_err(dev, "Failed to map buffer address\n");
+	kunmap_atomic(buffer);
+	queue_work(kpcibio_workqueue, work);
+	return;
+    }
+
+    dev_dbg(dev, "memcpy_toio() dest: 0x%llX, src: 0x%llX, len: 0x%x\n", (u64)binfo->addr, (u64)buffer, binfo->descr->len);
+    /* copy the data over to the Host (RC) */
+    memcpy_toio(binfo->addr, buffer, binfo->descr->len);
+
+    dev_ring = get_device_ring(binfo->epf_bio);
+    spin_lock(&binfo->epf_bio->lock);
+    dev_ring->ring[binfo->epf_bio->dev_idx].index = binfo->descr_idx;
+    dev_ring->idx = binfo->epf_bio->dev_idx = (binfo->epf_bio->dev_idx + 1) % NUM_DESRIPTORS;
+    spin_unlock(&binfo->epf_bio->lock);
+    /* print_hex_dump(KERN_WARNING, "raw: ", DUMP_PREFIX_OFFSET, 16, 16, buffer, 0x50, true); */
+    kunmap_atomic(buffer);
+    free_epf_bio_info(binfo);
+}
+
 static void pci_epf_bio_transfer_complete(struct bio *bio)
 {
     
     struct pci_epf_bio_info *epf_bio_info = bio->bi_private;
     struct device *dev = &epf_bio_info->epf_bio->epf->dev;
-    static struct pci_bio_device_ring *dev_ring;
-    int dev_idx = epf_bio_info->epf_bio->dev_idx;
-    int ret;
     
-    if (bio->bi_status == BLK_STS_OK) {
-	char *buffer = kmap_atomic(epf_bio_info->page);
-	ret = pci_epc_map_addr(epf_bio_info->epf_bio->epf->epc, epf_bio_info->epf_bio->epf->func_no, epf_bio_info->epf_bio->epf->vfunc_no, epf_bio_info->phys_addr, epf_bio_info->descr->addr, epf_bio_info->descr->len);
-	
-	if (ret) {
-		dev_err(dev, "Failed to map buffer address\n");
-		return;
-	}
-
-	dev_err(dev, "memcpy_toio() dest: 0x%llX, src: 0x%llX, len: 0x%x\n", (u64)epf_bio_info->addr, (u64)buffer, epf_bio_info->descr->len);
-	memcpy_toio(epf_bio_info->addr, buffer, epf_bio_info->descr->len);
-	dev_ring = get_device_ring(epf_bio_info->epf_bio);
-	dev_ring->ring[dev_idx].index = epf_bio_info->descr_idx;
-	dev_ring->idx = (dev_idx + 1) % NUM_DESRIPTORS;
-	/* pci_epc_unmap_addr(epf_bio_info->epf_bio->epf->epc, epf_bio_info->epf_bio->epf->func_no, epf_bio_info->epf_bio->epf->vfunc_no, epf_bio_info->phys_addr); */
-	/* pci_epc_mem_free_addr(epf_bio_info->epf_bio->epf->epc, epf_bio_info->phys_addr, epf_bio_info->addr, epf_bio_info->descr->len); */
-	print_hex_dump(KERN_WARNING, "raw: ", DUMP_PREFIX_OFFSET, 16, 16, buffer, 0x50, true);
-	/* kunmap(epf_bio_info->page); */
-	/* free_epf_bio_info(epf_bio_info); */
-    } else {
+    if (bio->bi_status != BLK_STS_OK) {
 	dev_err(dev, "BIO error %i\n", bio->bi_status);
+    } else {
+	INIT_WORK(&epf_bio_info->cleanup_work, pci_epf_bio_cleanup_handler);
+	queue_work(kpcibio_workqueue, &epf_bio_info->cleanup_work);
     }
-	
 }
+
 
 static void pci_epf_bio_cmd_handler(struct work_struct *work)
 {
@@ -471,7 +492,7 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 	struct pci_epf_bio_descr __iomem *descr;
 	struct pci_bio_driver_ring *drv_ring;
-	int i, ridx, desc_idx, len;
+	int len;
 	struct pci_bio_driver_ring_entry *de;
 	struct pci_epf_bio_info *bio_info;
 
@@ -489,8 +510,8 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	/* dev_info(dev, "-> reg: command: 0x%x\n", reg->command); */
 	/* dev_info(dev, "-> reg: status: 0x%x\n", reg->status); */
 
-	/* reg->command = 0; */
-	/* reg->status = 0; */
+	reg->command = 0;
+	reg->status = 0;
 
 	if (command & COMMAND_RAISE_MSI_IRQ) {
 		count = pci_epc_get_msi(epc, epf->func_no, epf->vfunc_no);
@@ -512,26 +533,28 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 		goto reset_handler;
 	}
 
+	/* dev_info_ratelimited(dev, "%s: int: %i, ext: %i\n", __FUNCTION__, epf_bio->drv_idx, drv_ring->idx); */
+	
 	if (epf_bio->drv_idx != drv_ring->idx) {
-	    dev_info(dev, "New entry in driver ring to process. Internal counter = %i, driver counter = %i\n", epf_bio->drv_idx, drv_ring->idx);
+	    dev_dbg(dev, "New entry in driver ring to process. Internal counter = %i, driver counter = %i\n", epf_bio->drv_idx, drv_ring->idx);
 	    while (epf_bio->drv_idx != drv_ring->idx) {
 		de = &drv_ring->ring[epf_bio->drv_idx];
 		descr = &epf_bio->descr[de->index];
-		dev_info(dev, "Driver ring Index to process: %i, flags: %i\n", de->index, de->flags);
-		dev_info(dev, "DescrInfo: addr: 0x%llX, sector: 0x%llX, len: 0x%x, offset: 0x%x, dir: %s\n", descr->addr, descr->s_sector, descr->len, descr->offset, (descr->opf == WRITE) ? "WRITE" : "READ");
+		dev_dbg(dev, "Driver ring Index to process: %i, flags: %i\n", de->index, de->flags);
+		dev_dbg(dev, "DescrInfo:  sector: 0x%llX, len: 0x%x, dir: %s\n", descr->s_sector, descr->len, (descr->opf == WRITE) ? "WRITE" : "READ");
 		bio_info = alloc_pci_epf_bio_info(epf_bio, descr->len, descr, de->index);
 		if (unlikely(!bio_info)) {
+		    dev_err(dev, "Unable to allocate bio_info\n");
 		    goto reset_handler;
 		}
 		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % NUM_DESRIPTORS;
-		
 		bio_set_dev(bio_info->bio, epf_bio->real_bd);
 		bio_info->bio->bi_iter.bi_sector = descr->s_sector;
 		bio_info->bio->bi_opf = REQ_OP_READ;
 		bio_info->bio->bi_end_io = pci_epf_bio_transfer_complete;
 		bio_info->bio->bi_private = bio_info;
-		len = bio_add_page(bio_info->bio, bio_info->page, descr->len, descr->offset);
-		dev_info(dev, "Added pages : %i, offset: %i\n", len, descr->offset);
+		bio_add_page(bio_info->bio, bio_info->page, descr->len, descr->offset);
+		dev_dbg(dev, "Added pages : %i, offset: %i\n", len, descr->offset);
 		submit_bio(bio_info->bio);
 	    }
 	    /* Process all from epf_bio->drv_idx -> drv_ring->idx*/
@@ -578,7 +601,7 @@ static int pci_epf_bio_set_bar(struct pci_epf *epf)
 
 	epc_features = epf_bio->epc_features;
 
-	dev_info(dev, "Setting test BAR%d\n", bio_reg_bar);
+	dev_dbg(dev, "Setting BIO BAR%d\n", bio_reg_bar);
 
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar += add) {
 		epf_bar = &epf->bar[bar];
@@ -964,7 +987,7 @@ static int pci_epf_ioctl(struct block_device *bdev, fmode_t mode,
 	int nr = _IOC_NR(cmd);
 	int sz = _IOC_SIZE(cmd);
 
-	printk(KERN_ERR
+	printk(KERN_DEBUG
 	       "-------> IOCTL received %d. R/WR: 0x%x, TYPE: 0x%x, NR: 0x%x, SIZE: 0x%x\n",
 	       cmd, dir, tp, nr, sz);
 	return -EINVAL;
