@@ -3,7 +3,7 @@
  * PCI Remote Block Device Driver
  *
  * Copyright (C) 2023 Continental Automotive GmbH
- * Copyright 2023 Continental Automotive GmbH
+ * Wadim Mueller <wadim.mueller@continental-corporation.com>
  */
 
 #include <linux/major.h>
@@ -31,6 +31,8 @@
 #include <linux/hdreg.h>
 #include <linux/kthread.h>
 
+
+#define RBD_MAGIC 0x636f6e74
 #define NUM_DESRIPTORS 512
 
 #define COMMAND_SET_QUEUE BIT(6)
@@ -108,10 +110,6 @@ enum pci_barno {
 	BAR_5,
 };
 
-struct pci_remote_bd_data {
-	enum pci_barno reg_bar;
-	size_t alignment;
-};
 
 struct pci_remote_block_device {
 	struct gendisk *gd;
@@ -128,7 +126,6 @@ struct pci_remote_block_device {
 	u32 dev_offset;
 	u32 drv_idx;
 	u32 dev_idx;
-	bool armed;
 	struct task_struct *dp_thr;
 	const struct blk_mq_queue_data *bd;
 };
@@ -145,46 +142,30 @@ struct pci_remote_bd_request {
 	struct scatterlist sg[];
 };
 
-static const struct pci_remote_bd_data rbd_default_data = {
-	.reg_bar = BAR_0,
-	.alignment = SZ_4K,
-};
-
-#define REM_BD_PCI_DEVICE(device_id, gen)                                      \
-	{                                                                      \
-		.vendor = 0x1234, .device = device_id,                         \
-		.subvendor = PCI_ANY_ID, .subdevice = PCI_ANY_ID,              \
-		.class = (PCI_CLASS_OTHERS << 8), .class_mask = 0xFFFFFFFF,    \
-		.driver_data = gen,                                            \
-	}
 
 static const struct pci_device_id pci_remote_bd_tbl[] = {
 	{
 		PCI_DEVICE(0x0, 0xc402),
-		.driver_data = (kernel_ulong_t)&rbd_default_data,
 	},
-
 	{ 0 }
 };
 
 static int major;
 static struct workqueue_struct *deferred_bio_add_workqueue;
 
-static struct pci_bio_driver_ring *
-get_driver_ring(struct pci_remote_block_device *rdev)
+static struct pci_bio_driver_ring * pci_rbd_get_driver_ring(struct pci_remote_block_device *rdev)
 {
 	return (struct pci_bio_driver_ring *)((u64)rdev->descr_ring +
 					      rdev->drv_offset);
 }
 
-static struct pci_bio_device_ring *
-get_device_ring(struct pci_remote_block_device *rdev)
+static struct pci_bio_device_ring * pci_rbd_get_device_ring(struct pci_remote_block_device *rdev)
 {
 	return (struct pci_bio_device_ring *)((u64)rdev->descr_ring +
 					      rdev->dev_offset);
 }
 
-static int get_and_mark_free_descriptor(struct pci_remote_block_device *rdev)
+static int pci_rbd_get_and_mark_free_descriptor(struct pci_remote_block_device *rdev)
 {
 	int i;
 	struct device *dev = &rdev->pdev->dev;
@@ -207,18 +188,23 @@ static int get_and_mark_free_descriptor(struct pci_remote_block_device *rdev)
 static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				     const struct blk_mq_queue_data *bd)
 {
+        struct req_iterator iter;
+	struct bio_vec bv;
+
 	struct pci_remote_block_device *rdev = hctx->queue->queuedata;
 	struct pci_remote_bd_request *rb_req = blk_mq_rq_to_pdu(bd->rq);
 	int descr_idx;
 	struct device *dev = &rdev->pdev->dev;
 	struct pci_epf_bio_descr __iomem *dtu;
-	struct pci_bio_driver_ring *drv_ring = get_driver_ring(rdev);
+	struct pci_bio_driver_ring *drv_ring = pci_rbd_get_driver_ring(rdev);
 	dma_addr_t dma_addr;
+	char *buf;
+	int i = 0;
 
 	rb_req->rdev = rdev;
 	dev_dbg(dev, "%s called\n", __FUNCTION__);
 
-	descr_idx = get_and_mark_free_descriptor(rdev);
+	descr_idx = pci_rbd_get_and_mark_free_descriptor(rdev);
 	if (unlikely(descr_idx < 0))
 		return BLK_STS_RESOURCE;
 
@@ -231,12 +217,24 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return BLK_STS_RESOURCE;
 	}
 
-	dma_addr = dma_map_single(dev, page_address(rb_req->pg),
+	buf = page_address(rb_req->pg);
+	dma_addr = dma_map_single(dev, buf,
 				  blk_rq_bytes(bd->rq), DMA_FROM_DEVICE);
 	dtu->addr = dma_addr;
 	dtu->len = blk_rq_bytes(bd->rq);
 	dtu->offset = 0;
 	dtu->opf = rq_data_dir(bd->rq);
+	if (dtu->opf == WRITE) {
+	    rq_for_each_segment (bv, bd->rq, iter) {
+		memcpy_from_bvec(buf, &bv);
+				dev_info(dev,
+					"WRITE: %i: bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX. sec: 0x%llX, len: 0x%x\n",
+					 i, bv.bv_len, bv.bv_offset, page_address(bv.bv_page), buf, blk_rq_pos(bd->rq), blk_rq_bytes(bd->rq));
+				buf += bv.bv_len;
+				i++;
+			}
+
+	}
 	dtu->s_sector = blk_rq_pos(bd->rq);
 	dtu->tag = (u64)rb_req;
 	spin_lock(&rdev->lock);
@@ -283,6 +281,8 @@ static int pci_rbd_open(struct block_device *bdev, fmode_t mode)
 
 static void pci_rbd_release(struct gendisk *disk, fmode_t mode)
 {
+    struct pci_remote_block_device *rdev = disk->private_data;
+    dev_dbg(&rdev->pdev->dev, "%s called\n", __FUNCTION__);
 }
 
 static int pci_rbd_getgeo(struct block_device *bdev, struct hd_geometry *geo)
@@ -348,7 +348,7 @@ static int pci_remote_bd_dispatch(void *cookie)
 	struct pci_remote_block_device *rdev =
 		(struct pci_remote_block_device *)cookie;
 	struct device *dev = &rdev->pdev->dev;
-	struct pci_bio_device_ring *dev_ring = get_device_ring(rdev);
+	struct pci_bio_device_ring *dev_ring = pci_rbd_get_device_ring(rdev);
 	struct req_iterator iter;
 	struct bio_vec bv;
 
@@ -412,7 +412,6 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	dma_addr_t phys_addr;
 	void __iomem *base;
 	unsigned long timeout = 0;
-	/* struct pci_epf_bio_descr __iomem * or ; */
 	size_t alignment = SZ_4K;
 	struct pci_remote_block_device *rdev =
 		devm_kzalloc(dev, sizeof(*rdev), GFP_KERNEL);
@@ -493,15 +492,13 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 		goto err_iounmap;
 	}
 
-	/* dev_err(dev, "-----> READING EP MAGIC at (0x%llX) offset 0  = 0x%x\n", */
-	/* 	(u64)rdev->base, rdev->base->magic); */
-	/* dev_err(dev, "-----> READING EP SECTOR_COUNT at (0x%llX ) = 0x%llX\n", */
-	/* 	(u64)rdev->base, rdev->base->num_sectors); */
-	/* dev_err(dev, "-----> READING EP DEVICE PATH at (0x%llX ) = %s\n", */
-	/* 	(u64)rdev->base, rdev->base->dev_name); */
-
-	orig_phys_addr =
-		dma_map_single(dev, rdev->descr_ring,
+	if (rdev->base->magic != RBD_MAGIC) {
+	    dev_err(dev, "Invalid magic at BAR0 detected. Expected 0x%x. Read 0x%x\n", RBD_MAGIC, rdev->base->magic);
+	    err = -ENODEV;
+	    goto err_iounmap;
+	}
+	
+	orig_phys_addr = dma_map_single(dev, rdev->descr_ring,
 			       rdev->descr_size + alignment, DMA_FROM_DEVICE);
 	if (dma_mapping_error(dev, orig_phys_addr)) {
 		dev_err(dev, "failed to map descriptor address\n");
@@ -536,19 +533,10 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 
 	rdev->base->queue_addr = phys_addr;
 	rdev->base->queue_size = rdev->descr_size;
+	/* Don't think this is really needed. PCIe has no ordering on write requests.*/
 	__iomb();
 	rdev->base->command = COMMAND_SET_QUEUE;
 
-	/* timeout = jiffies + 500; */
-	/* while (!time_after(jiffies, timeout)) { */
-	/* } */
-
-	/* rdev->base->command = COMMAND_WRITE_TO_QUEUE; */
-	/* dev_info(dev, "-----> First Timeout \n"); */
-	/* timeout = jiffies + 500; */
-	/* while (!time_after(jiffies, timeout)) { */
-	/* } */
-	/* dev_info(dev, "-----> Second Timeout \n"); */
 	for (i = 0; i < rdev->num_irqs; i++) {
 		err = devm_request_irq(dev, pci_irq_vector(pdev, i),
 				       pci_rbd_irqhandler, IRQF_SHARED,
@@ -558,23 +546,14 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 			break;
 		}
 	}
-	/* for (i = 0; i < 16; ++i) { */
-	/* 	or = &rdev->descr_ring[i]; */
-	/* 	dev_info( */
-	/* 		dev, */
-	/* 		"%i: Lets look what was written: addr: 0x%llX, s_sector: 0x%llX, s_offset = 0x%x, num_sectors = 0x%x", */
-	/* 		i, or->addr, or->s_sector, or->offset, or->len); */
-	/* } */
 
-	timeout = jiffies + 10;
-	while (!time_after(jiffies, timeout)) {
-	}
+	timeout = jiffies + 5;
+	while (!time_after(jiffies, timeout));
 
 	rdev->base->command = COMMAND_START;
 
-	timeout = jiffies + 10;
-	while (!time_after(jiffies, timeout)) {
-	}
+	timeout = jiffies + 5;
+	while (!time_after(jiffies, timeout));
 
 	deferred_bio_add_workqueue =
 		alloc_workqueue("pci_rbd_bio_add", WQ_UNBOUND, 1);
@@ -625,7 +604,8 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->gd->private_data = rdev;
 	rdev->gd->queue->queuedata = rdev;
 
-	snprintf(rdev->gd->disk_name, 32, "pci_rbd-%s",
+	/* skip the /dev/ part, and export it as pci-rbd-<bdev-name>*/
+	snprintf(rdev->gd->disk_name, sizeof(rdev->gd->disk_name), "pci-rbd-%s",
 		 &rdev->base->dev_name[5]);
 	set_capacity(rdev->gd, rdev->base->num_sectors);
 	device_add_disk(dev, rdev->gd, NULL);

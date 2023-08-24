@@ -36,6 +36,7 @@
 #include <linux/hdreg.h>
 
 
+#define RBD_MAGIC 0x636f6e74
 static int major;
 static struct workqueue_struct *deferred_bio_add_workqueue;
 
@@ -274,7 +275,7 @@ static int pci_epf_bio_map_queue(struct pci_epf_bio *epf_bio, struct pci_epf_bio
 	}
 
 	epf_bio->descr = addr;
-	dev_err(dev, "\tQUEUE => Queue Address physical: 0x%llX\t Queue Address virt: 0x%llX\t Queue Addr PCI: 0x%llX\n",
+	dev_dbg(dev, "\tQUEUE => Queue Address physical: 0x%llX\t Queue Address virt: 0x%llX\t Queue Addr PCI: 0x%llX\n",
 		phys_addr, addr, epf_bio->descr_addr);
 	return 0;
 err_queue_addr:
@@ -441,25 +442,25 @@ static void pci_epf_bio_cleanup_handler(struct work_struct *work)
     int ret;
     
     dev_dbg(dev, "%s: func_no: %i, vfunc_no: %i, descr: 0x%llX", __FUNCTION__, binfo->epf_bio->epf->func_no, binfo->epf_bio->epf->vfunc_no, binfo->descr);
-    ret = pci_epc_map_addr(binfo->epf_bio->epf->epc, binfo->epf_bio->epf->func_no, binfo->epf_bio->epf->vfunc_no, binfo->phys_addr, binfo->descr->addr, binfo->descr->len);
-	
-    if (ret) {
-	dev_err(dev, "Failed to map buffer address\n");
-	kunmap_atomic(buffer);
-	queue_work(kpcibio_workqueue, work);
-	return;
-    }
+    
+    if (binfo->descr->opf == READ) {
+	ret = pci_epc_map_addr(binfo->epf_bio->epf->epc, binfo->epf_bio->epf->func_no, binfo->epf_bio->epf->vfunc_no, binfo->phys_addr, binfo->descr->addr, binfo->descr->len);
 
-    dev_dbg(dev, "memcpy_toio() dest: 0x%llX, src: 0x%llX, len: 0x%x\n", (u64)binfo->addr, (u64)buffer, binfo->descr->len);
-    /* copy the data over to the Host (RC) */
-    memcpy_toio(binfo->addr, buffer, binfo->descr->len);
+	if (ret) {
+	    dev_err(dev, "Failed to map buffer address\n");
+	    kunmap_atomic(buffer);
+	    queue_work(kpcibio_workqueue, work);
+	    return;
+	}
+	dev_dbg(dev, "memcpy_toio() dest: 0x%llX, src: 0x%llX, len: 0x%x\n", (u64)binfo->addr, (u64)buffer, binfo->descr->len);
+	memcpy_toio(binfo->addr, buffer, binfo->descr->len);
+    }
 
     dev_ring = get_device_ring(binfo->epf_bio);
     spin_lock(&binfo->epf_bio->lock);
     dev_ring->ring[binfo->epf_bio->dev_idx].index = binfo->descr_idx;
     dev_ring->idx = binfo->epf_bio->dev_idx = (binfo->epf_bio->dev_idx + 1) % NUM_DESRIPTORS;
     spin_unlock(&binfo->epf_bio->lock);
-    /* print_hex_dump(KERN_WARNING, "raw: ", DUMP_PREFIX_OFFSET, 16, 16, buffer, 0x50, true); */
     kunmap_atomic(buffer);
     free_epf_bio_info(binfo);
 }
@@ -492,7 +493,7 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	struct pci_epf_bio_reg *reg = epf_bio->reg[bio_reg_bar];
 	struct pci_epf_bio_descr __iomem *descr;
 	struct pci_bio_driver_ring *drv_ring;
-	int len;
+	int len, ret;
 	struct pci_bio_driver_ring_entry *de;
 	struct pci_epf_bio_info *bio_info;
 
@@ -501,14 +502,7 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 	
 	command = reg->command;
 
-	/* if (!command) */
-	/* 	goto reset_handler; */
-
 	drv_ring = get_driver_ring(epf_bio);	
-
-	/* dev_info(dev, "-> reg: magic: 0x%x\n", reg->magic); */
-	/* dev_info(dev, "-> reg: command: 0x%x\n", reg->command); */
-	/* dev_info(dev, "-> reg: status: 0x%x\n", reg->status); */
 
 	reg->command = 0;
 	reg->status = 0;
@@ -533,8 +527,6 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 		goto reset_handler;
 	}
 
-	/* dev_info_ratelimited(dev, "%s: int: %i, ext: %i\n", __FUNCTION__, epf_bio->drv_idx, drv_ring->idx); */
-	
 	if (epf_bio->drv_idx != drv_ring->idx) {
 	    dev_dbg(dev, "New entry in driver ring to process. Internal counter = %i, driver counter = %i\n", epf_bio->drv_idx, drv_ring->idx);
 	    while (epf_bio->drv_idx != drv_ring->idx) {
@@ -547,18 +539,30 @@ static void pci_epf_bio_cmd_handler(struct work_struct *work)
 		    dev_err(dev, "Unable to allocate bio_info\n");
 		    goto reset_handler;
 		}
-		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % NUM_DESRIPTORS;
+		
+
 		bio_set_dev(bio_info->bio, epf_bio->real_bd);
 		bio_info->bio->bi_iter.bi_sector = descr->s_sector;
-		bio_info->bio->bi_opf = REQ_OP_READ;
+		/*FIXME: HACK*/
+		bio_info->bio->bi_opf = (descr->opf == WRITE) ? REQ_OP_WRITE : REQ_OP_READ;
+		if (descr->opf == WRITE) {
+		    ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, descr->addr, descr->len);
+		    
+		    if (ret) {
+			dev_err(dev, "Failed to map queue address\n");
+			free_epf_bio_info(bio_info);
+			goto reset_handler;
+		    }
+		    memcpy_fromio(page_address(bio_info->page), bio_info->addr, descr->len);
+		}
+		
+		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % NUM_DESRIPTORS;
 		bio_info->bio->bi_end_io = pci_epf_bio_transfer_complete;
 		bio_info->bio->bi_private = bio_info;
 		bio_add_page(bio_info->bio, bio_info->page, descr->len, descr->offset);
 		dev_dbg(dev, "Added pages : %i, offset: %i\n", len, descr->offset);
 		submit_bio(bio_info->bio);
 	    }
-	    /* Process all from epf_bio->drv_idx -> drv_ring->idx*/
-	    
 	}
 
 reset_handler:
@@ -573,7 +577,7 @@ static void pci_epf_bio_unbind(struct pci_epf *epf)
 	struct pci_epf_bar *epf_bar;
 	int bar;
 
-	dev_err(&epf->dev, "%s called\n", __FUNCTION__);
+	dev_dbg(&epf->dev, "%s called\n", __FUNCTION__);
 	cancel_delayed_work(&epf_bio->cmd_handler);
 	pci_epf_bio_clean_dma_chan(epf_bio);
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
@@ -805,7 +809,7 @@ static int pci_epf_bio_bind(struct pci_epf *epf)
 	bool core_init_notifier = false;
 	struct pci_epf_bio_reg *breg;
 
-	dev_err(&epf->dev, "%s called\n", __FUNCTION__);
+	dev_dbg(&epf->dev, "%s called\n", __FUNCTION__);
 	if (WARN_ON_ONCE(!epc))
 		return -EINVAL;
 
@@ -830,7 +834,7 @@ static int pci_epf_bio_bind(struct pci_epf *epf)
 		return ret;
 
 	breg = (struct pci_epf_bio_reg *) epf_bio->reg[bio_reg_bar];
-	breg->magic = 0x636f6e74;
+	breg->magic = RBD_MAGIC;
 	breg->num_sectors = get_capacity(bdev_whole(epf_bio->real_bd)->bd_disk);
 	strncpy(breg->dev_name, block_dev_name, sizeof(breg->dev_name));
 	
@@ -1104,7 +1108,7 @@ static int pci_epf_bio_probe(struct pci_epf *epf)
 
 	epf_set_drvdata(epf, epf_bio);
 	setup_block_device(epf_bio);
-	dev_err(dev, "%s called\n", __FUNCTION__);
+	dev_dbg(dev, "%s called\n", __FUNCTION__);
 	return 0;
 }
 
