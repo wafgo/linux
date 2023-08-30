@@ -212,10 +212,10 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 			complete(di->complete);
 #endif
 
-		if (signal && s32cc_pp->uinfo.send_signal_to_user)
-			s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo);
-		if (s32cc_pp->call_back)
-			s32cc_pp->call_back(val_write);
+		/* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
+		/* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
+		/* if (s32cc_pp->call_back) */
+		/* 	s32cc_pp->call_back(val_write); */
 	}
 	if (val_read) {
 		bool signal = (di->rd_ch.status == DMA_CH_RUNNING);
@@ -228,8 +228,8 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 		else if (di->complete)
 			complete(di->complete);
 #endif
-		if (signal && s32cc_pp->uinfo.send_signal_to_user)
-			s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo);
+		/* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
+		/* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
 	}
 
 	return IRQ_HANDLED;
