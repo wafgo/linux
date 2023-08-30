@@ -167,13 +167,14 @@ static int pci_epf_test_init_dma_chan(struct pci_epf_test *epf_test)
 	dma_cap_set(DMA_MEMCPY, mask);
 
 	dma_chan = dma_request_chan_by_mask(&mask);
+	init_completion(&epf_test->transfer_complete);
+	
 	if (IS_ERR(dma_chan)) {
 		ret = PTR_ERR(dma_chan);
 		if (ret != -EPROBE_DEFER)
 			dev_err(dev, "Failed to get DMA channel\n");
 		return ret;
 	}
-	init_completion(&epf_test->transfer_complete);
 
 	epf_test->dma_chan = dma_chan;
 

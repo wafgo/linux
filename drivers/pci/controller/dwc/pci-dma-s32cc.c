@@ -362,19 +362,19 @@ int dw_pcie_dma_single_rw(struct dma_info *di,
 
 		if (flags & (DMA_FLAG_RIE | DMA_FLAG_LIE)) {
 			if (flags & DMA_FLAG_WRITE_ELEM) {
-				dw_pcie_dma_set_wr_remote_abort_int(di,
-					dma_single_rw->imwr, ch_nr);
-				dw_pcie_dma_set_wr_remote_done_int(di,
-					dma_single_rw->imwr, ch_nr);
+				/* dw_pcie_dma_set_wr_remote_abort_int(di, */
+				/* 	dma_single_rw->imwr, ch_nr); */
+				/* dw_pcie_dma_set_wr_remote_done_int(di, */
+				/* 	dma_single_rw->imwr, ch_nr); */
 				dw_pcie_dma_clear_wr_done_int_mask(di,
 					(1 << ch_nr));
 				dw_pcie_dma_clear_wr_abort_int_mask(di,
 					(1 << ch_nr));
 			} else if (flags & DMA_FLAG_READ_ELEM) {
-				dw_pcie_dma_set_rd_remote_abort_int(di,
-					dma_single_rw->imwr, ch_nr);
-				dw_pcie_dma_set_rd_remote_done_int(di,
-					dma_single_rw->imwr, ch_nr);
+				/* dw_pcie_dma_set_rd_remote_abort_int(di, */
+				/* 	dma_single_rw->imwr, ch_nr); */
+				/* dw_pcie_dma_set_rd_remote_done_int(di, */
+				/* 	dma_single_rw->imwr, ch_nr); */
 				dw_pcie_dma_clear_rd_done_int_mask(di,
 					(1 << ch_nr));
 				dw_pcie_dma_clear_rd_abort_int_mask(di,

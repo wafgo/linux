@@ -26,12 +26,12 @@ config PCI_EPF_NTB
 
 	  If in doubt, say "N" to disable Endpoint NTB driver.
 
-config PCI_EPF_BIO
-	tristate "PCI Endpoint BIO driver"
+config PCI_EPF_BLOCK_PASSTHRU
+	tristate "PCI Endpoint Passthru driver"
 	depends on PCI_ENDPOINT
-	select CRC32
 	help
-	  Select this configuration option to enable the Block IO driver for PCI Endpoint.
-	  BIO driver implements Block IO controller functionality using Virtio like access patterns
+	  Select this configuration option to enable the Block Device Passthrough functionality.
+	  This driver can pass through any Block device available on the Host on which this driver is loaded.
+	  The decision which device is provided as a PCI Endpoint function is currently hardcoded into the module
 
-	  If in doubt, say "N" to disable Endpoint BIO driver.
+	  If in doubt, say "N" to disable Endpoint Block Passhthru driver.

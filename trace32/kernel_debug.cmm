@@ -16,7 +16,7 @@ SYStem.Mode.Attach
 
 ; load linux kernel symbols
 Data.LOAD.Elf ../vmlinux /NoCODE
-data.load.elf ~/devel/github/arm-trusted-firmware/build/conti_hdk_1_1/debug/bl31/bl31.elf /NoCODE /NoClear
+; data.load.elf ~/devel/github/arm-trusted-firmware/build/conti_hdk_1_1/debug/bl31/bl31.elf /NoCODE /NoClear
 
 ; Debugger Address Translation
 ;  Kernel Virtual Address Range: 0xffffffc000000000--0xffffffc00cffffff (212M)
