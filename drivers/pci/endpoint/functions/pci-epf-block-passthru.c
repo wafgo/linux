@@ -34,10 +34,10 @@
 #include <linux/hdreg.h>
 #include <linux/kthread.h>
 
-//#define USE_DMA
+#define USE_DMA
 
-static char *pt_block_dev_name = "/dev/mmcblk0";
-//static char *pt_block_dev_name = "/dev/nvme0n1";
+//static char *pt_block_dev_name = "/dev/mmcblk0";
+static char *pt_block_dev_name = "/dev/nvme0n1";
 
 #define BLOCKPT_MAGIC 0x636f6e74
 
@@ -309,9 +309,9 @@ static void free_epf_bio_info(struct pci_epf_blockpt_info *info)
     pci_epc_mem_free_addr(info->epf_bio->epf->epc, info->phys_addr, info->addr, info->size);
     __free_pages(info->page, info->page_order);
     
-    spin_lock_bh(&info->epf_bio->lock);
+    spin_lock_irq(&info->epf_bio->lock);
     list_del(&info->node);
-    spin_unlock_bh(&info->epf_bio->lock);
+    spin_unlock_irq(&info->epf_bio->lock);
     bio_put(info->bio);    
     devm_kfree(dev, info);
 }
@@ -390,7 +390,7 @@ static void pci_epf_blockpt_transfer_complete(struct bio *bio)
 	dev_err(dev, "BIO error %i\n", bio->bi_status);
     }
 
-    dev_info(dev, "BIO %i\n", binfo->descr_idx);
+    dev_dbg(dev, "BIO %i\n", binfo->descr_idx);
     
     spin_lock(&binfo->epf_bio->lock);
     list_add_tail(&binfo->node, &binfo->epf_bio->proc_list);
@@ -871,7 +871,7 @@ static int pci_blockpt_produce(void *cookie)
 #endif
 		}
 
-		dev_info(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de->index);
+		dev_dbg(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de->index);
 		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % epf_bio->num_desc;
 		bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
 		bio_info->bio->bi_private = bio_info;
@@ -908,9 +908,9 @@ static int pci_blockpt_digest(void *cookie)
 	    /* dev_info_ratelimited(dev, "%s\n", __FUNCTION__); */
 
 	    /* rcu_read_lock(); */
-	    spin_lock_bh(&ebio->lock);
+	    spin_lock_irq(&ebio->lock);
 	    bi = list_first_entry_or_null(&ebio->proc_list, struct pci_epf_blockpt_info, node);
-	    spin_unlock_bh(&ebio->lock);
+	    spin_unlock_irq(&ebio->lock);
 	    /* rcu_read_unlock(); */
 
 	    if (bi == NULL) {
@@ -925,14 +925,13 @@ static int pci_blockpt_digest(void *cookie)
 		    dev_err(dev, "Failed to map buffer address\n");
 		    continue;
 		}
-		buf = kmap_atomic(bi->page);	
+
 #ifdef USE_DMA
-		dev_dbg(dev, "Trying DMA src: 0x%llX, dst: 0x%llX. PHYS_ADDR 0x%llX (dma_addr: 0x%llX, phys_address: 0x%llX, virt_address: 0x%llX) is mapped to 0x%llX. Length: 0x%x\n", bi->dma_addr, bi->phys_addr, bi->phys_addr, bi->dma_addr, page_to_phys(bi->page), buf, bi->descr->addr, bi->descr->len);
-		
 		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 0, bi->dma_addr, bi->phys_addr, bi->descr->len, &bi->dma_transfer_complete);
 		if (ret) {
 		    dev_err(dev, "Failed to start single DMA read: %i\n", ret);
 		} else {
+		    /* cond_resched(); */
 		    ret = wait_for_completion_interruptible_timeout(&bi->dma_transfer_complete, msecs_to_jiffies(10));
 		    if (ret < 0) {
 			dev_err(dev, "DMA wait_for_completion Timed out\n");
@@ -940,12 +939,14 @@ static int pci_blockpt_digest(void *cookie)
 		}
 
 #else
+		buf = kmap_atomic(bi->page);	
 		dev_dbg(dev, "memcpy_toio() dest: 0x%llX, src: 0x%llX, len: 0x%x. dev_idx = %i, descr_idx = %i\n", (u64)bi->addr, (u64)buf, bi->descr->len, ebio->dev_idx, bi->descr_idx);
 		memcpy_toio(bi->addr, buf, bi->descr->len);
-#endif
 		kunmap_atomic(buf);
+#endif
+
 	    }
-	    dev_info(dev, "Consume (%i)\n", bi->descr_idx);
+	    dev_dbg(dev, "Consume (%i)\n", bi->descr_idx);
 	    /* spin_lock(&ebio->lock); */
 	    dev_ring->ring[ebio->dev_idx].index = bi->descr_idx;
 	    dev_ring->idx = ebio->dev_idx = (ebio->dev_idx + 1) % ebio->num_desc;
