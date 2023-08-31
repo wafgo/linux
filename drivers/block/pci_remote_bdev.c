@@ -65,13 +65,14 @@ struct pci_epf_bio_reg {
 struct pci_epf_bio_descr {
 	sector_t s_sector; /* start sector of the request */
 	u64 addr; /* where the data is  */
-	u64 flags;
 	u64 opf;
 	u64 tag;
 	u32 len; /* bytes to put at addr + s_offset*/
 	u32 offset; /* offset from addr */
         u32 status;
+    	u32 flags;
         u32 res0;
+        u32 res1;
 };
 
 struct pci_bio_driver_ring_entry {
@@ -176,9 +177,10 @@ static int pci_rbd_get_and_mark_free_descriptor(struct pci_remote_block_device *
 	spin_lock(&rdev->lock);
 	for (i = 0; i < NUM_DESRIPTORS; ++i) {
 		struct pci_epf_bio_descr __iomem *de = &rdev->descr_ring[i];
-		if (!(de->flags & PBI_EPF_BIO_F_USED)) {
+		u32 flags = READ_ONCE(de->flags);
+		if (!(flags & PBI_EPF_BIO_F_USED)) {
 			dev_dbg(dev, "Found free descriptor at idx %i\n", i);
-			de->flags |= PBI_EPF_BIO_F_USED;
+			WRITE_ONCE(de->flags, flags | PBI_EPF_BIO_F_USED);
 			spin_unlock(&rdev->lock);
 			return i;
 		}
@@ -205,14 +207,13 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	int descr_idx;
 	struct device *dev = &rdev->pdev->dev;
 	struct pci_epf_bio_descr __iomem *dtu;
-	struct pci_bio_driver_ring *drv_ring = pci_rbd_get_driver_ring(rdev);
+	struct pci_bio_driver_ring __iomem *drv_ring = pci_rbd_get_driver_ring(rdev);
 	dma_addr_t dma_addr;
 	char *buf;
 	int err;
 	int i = 0;
 
 	rb_req->rdev = rdev;
-
 	if (!is_valid_request(req_op(bd->rq))) {
 	    dev_err(dev, "Unsupported Request: %i\n", req_op(bd->rq));
 	    return BLK_STS_NOTSUPP;
@@ -220,14 +221,14 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	descr_idx = pci_rbd_get_and_mark_free_descriptor(rdev);
 	if (unlikely(descr_idx < 0))
-		return BLK_STS_AGAIN;
+	    return BLK_STS_AGAIN;
 
 	dtu = &rdev->descr_ring[descr_idx];
 	rb_req->order = get_order(blk_rq_bytes(bd->rq));
 	rb_req->pg = alloc_pages(GFP_ATOMIC | GFP_DMA, rb_req->order);
 	if (unlikely(!rb_req->pg)) {
-	    dev_err(dev, "Cannot alloc pages for %i bytes\n", blk_rq_bytes(bd->rq));
-	    err = BLK_STS_DEV_RESOURCE;
+	    dev_err(dev, "cannot alloc %i page(s)\n", (1 << rb_req->order));
+	    err = BLK_STS_AGAIN;
 	    goto free_descr;
 	}
 
@@ -235,11 +236,10 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	rb_req->descr_idx = descr_idx;
 	
 	buf = page_address(rb_req->pg);
-	dma_addr = dma_map_single(dev, buf,
-				  blk_rq_bytes(bd->rq), rq_dma_dir(bd->rq));
+	dma_addr = dma_map_single(dev, buf, blk_rq_bytes(bd->rq), rq_dma_dir(bd->rq));
 	if (dma_mapping_error(dev, dma_addr)) {
 		dev_err(dev, "failed to map page for descriptor\n");
-		err = BLK_STS_DEV_RESOURCE;
+		err = BLK_STS_AGAIN;
 		goto free_pages;
 	}
 	
@@ -258,10 +258,11 @@ static blk_status_t pci_rbd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 	dtu->s_sector = blk_rq_pos(bd->rq);
 	dtu->tag = (u64)rb_req;
-	/* refcount_inc(&bd->rq->ref); */
 	spin_lock(&rdev->lock);
-	drv_ring->ring[rdev->drv_idx].index = descr_idx;
-	drv_ring->idx = rdev->drv_idx = (rdev->drv_idx + 1) % NUM_DESRIPTORS;
+	iowrite16(descr_idx, &drv_ring->ring[rdev->drv_idx].index);
+	rdev->drv_idx = (rdev->drv_idx + 1) % NUM_DESRIPTORS;
+	smp_wmb();
+	iowrite16(rdev->drv_idx, &drv_ring->idx);
 	spin_unlock(&rdev->lock);
 	dev_dbg(dev, "(DIR: %s): Adding desc %i (%i). sector: 0x%llX, len: 0x%x, offset: 0x%x\n",
 		 (rq_data_dir(bd->rq) == WRITE) ? "WRITE" : "READ", descr_idx, rdev->drv_idx,
@@ -280,16 +281,13 @@ free_descr:
 static void pci_rbd_end_rq(struct request *rq)
 {
 	struct pci_remote_bd_request *rb_req = blk_mq_rq_to_pdu(rq);
-
-	/* refcount_dec(&rq->ref); */
 	blk_mq_end_request(rq, rb_req->descr->status);
 }
 
 static enum blk_eh_timer_return pci_rbd_timeout_rq(struct request *rq, bool res)
 {
 	struct pci_remote_bd_request *rb_req = blk_mq_rq_to_pdu(rq);
-	dev_err(&rb_req->rdev->pdev->dev, "%s called: %i\n", __FUNCTION__, rb_req->descr_idx);
-	/* blk_mq_complete_request(rq); */
+	dev_err(&rb_req->rdev->pdev->dev, "%s : Timeout waiting for request descriptor: %i\n", __FUNCTION__, rb_req->descr_idx);
 	return BLK_EH_DONE;
 }
 
@@ -356,68 +354,67 @@ static irqreturn_t pci_rbd_irqhandler(int irq, void *dev_id)
 
 static void pci_rbd_clear_descriptor(struct pci_remote_block_device *rdev, struct pci_epf_bio_descr *descr)
 {
-    /* spin_lock_bh(&rdev->lock); */
-    descr->flags &= ~PBI_EPF_BIO_F_USED;
-    /* memset(descr, 0, sizeof(*descr)); */
-    /* spin_unlock_bh(&rdev->lock); */
+    unsigned long flags;
+    spin_lock_irqsave(&rdev->lock, flags);
+    /* descr->flags &= ~PBI_EPF_BIO_F_USED; */
+    memset(descr, 0, sizeof(*descr));
+    spin_unlock_irqrestore(&rdev->lock, flags);
 }
 
 static int pci_remote_bd_dispatch(void *cookie)
 {
-	struct pci_remote_block_device *rdev =
-		(struct pci_remote_block_device *)cookie;
-	struct device *dev = &rdev->pdev->dev;
-	struct pci_bio_device_ring *dev_ring = pci_rbd_get_device_ring(rdev);
-	struct req_iterator iter;
-	struct bio_vec bv;
+    struct pci_remote_block_device *rdev =
+	(struct pci_remote_block_device *)cookie;
+    struct device *dev = &rdev->pdev->dev;
+    struct pci_bio_device_ring *dev_ring = pci_rbd_get_device_ring(rdev);
+    struct req_iterator iter;
+    struct bio_vec bv;
 
-	allow_signal(SIGINT);
-	allow_signal(SIGTERM);
-	allow_signal(SIGKILL);
-	allow_signal(SIGUSR1);
+    allow_signal(SIGINT);
+    allow_signal(SIGTERM);
+    allow_signal(SIGKILL);
+    allow_signal(SIGUSR1);
 
-	while (!kthread_should_stop()) {
-		while (dev_ring->idx != rdev->dev_idx) {
-			int descr_idx = dev_ring->ring[rdev->dev_idx].index;
-			struct pci_epf_bio_descr *desc =
-				&rdev->descr_ring[descr_idx];
-			struct pci_remote_bd_request *rb_req =
-				(struct pci_remote_bd_request *)desc->tag;
-			struct request *rq = blk_mq_rq_from_pdu(rb_req);
-			void *buf;
-			int i = 0;
+    while (!kthread_should_stop()) {
+	while (ioread16(&dev_ring->idx) != rdev->dev_idx) {
+	    int descr_idx = dev_ring->ring[rdev->dev_idx].index;
+	    struct pci_epf_bio_descr *desc =
+		&rdev->descr_ring[descr_idx];
+	    struct pci_remote_bd_request *rb_req =
+		(struct pci_remote_bd_request *)desc->tag;
+	    struct request *rq = blk_mq_rq_from_pdu(rb_req);
+	    void *buf;
+	    int i = 0;
 
-			dev_dbg(dev,"Dev Ring: Internal: %i, Device: %i. sec: 0x%llX, addr: 0x%llX, opf: %s, len: 0x%x, offset: 0x%x\n",
-				rdev->dev_idx, dev_ring->idx, desc->s_sector,
-				desc->addr,
-				(desc->opf == WRITE) ? "WRITE" : "READ",
-				desc->len, desc->offset);
-			dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->s_sector, desc->len);
-			if (rq_data_dir(rq) == READ) {
-			    buf = kmap(rb_req->pg);
-			    rq_for_each_segment (bv, rq, iter) {
-				memcpy_to_bvec(&bv, buf);
-				dev_dbg(dev,
-					"%i: bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX\n",
-					i, bv.bv_len, bv.bv_offset,
-					page_address(bv.bv_page), buf);
-				buf += bv.bv_len;
-				i++;
-			    }
-			    kunmap(rb_req->pg);
-			}
-			
-			dma_unmap_single(dev, desc->addr, desc->len,
-					 rq_dma_dir(rq));
-			pci_rbd_clear_descriptor(rdev, desc);
-			__free_pages(rb_req->pg, rb_req->order);
-			rdev->dev_idx = (rdev->dev_idx + 1) % NUM_DESRIPTORS;
-			blk_mq_complete_request(rq);
+	    BUG_ON(rb_req == NULL);
+	    BUG_ON(!(READ_ONCE(desc->flags) & PBI_EPF_BIO_F_USED));
+	    
+	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->s_sector, desc->len);
+	    if (rq_data_dir(rq) == READ) {
+		buf = kmap(rb_req->pg);
+		rq_for_each_segment (bv, rq, iter) {
+		    memcpy_to_bvec(&bv, buf);
+		    dev_dbg(dev,
+			    "%i: bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX\n",
+			    i, bv.bv_len, bv.bv_offset,
+			    page_address(bv.bv_page), buf);
+		    buf += bv.bv_len;
+		    i++;
 		}
-		usleep_range(500, 1000);
+		kunmap(rb_req->pg);
+	    }
+			
+	    dma_unmap_single(dev, desc->addr, desc->len,
+			     rq_dma_dir(rq));
+	    pci_rbd_clear_descriptor(rdev, desc);
+	    __free_pages(rb_req->pg, rb_req->order);
+	    WRITE_ONCE(rdev->dev_idx, (rdev->dev_idx + 1) % NUM_DESRIPTORS);
+	    blk_mq_complete_request(rq);
 	}
+	usleep_range(500, 1000);
+    }
 
-	return 0;
+    return 0;
 }
 
 static int pci_remote_bd_probe(struct pci_dev *pdev,

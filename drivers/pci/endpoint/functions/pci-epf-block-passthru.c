@@ -69,13 +69,14 @@ static struct workqueue_struct *kpciblockpt_wq;
 struct pci_epf_blockpt_descr {
     sector_t s_sector; /* start sector of the request */
     u64 addr; /* where the data is  */
-    u64 flags;
     u64 opf;
     u64 tag;
     u32 len; /* bytes to pu at addr + s_offset*/
     u32 offset;  /* offset from addr */
     u32 status;
+    u32 flags;
     u32 res0;
+    u32 res1;
 };
 
 struct pci_blockpt_driver_ring_entry {
@@ -324,7 +325,7 @@ struct pci_epf_blockpt_info *alloc_pci_epf_blockpt_info(struct pci_epf_blockpt *
     struct page *page;
     struct device *dma_dev = epf_bio->epf->epc->dev.parent;
     dma_addr_t dma_addr;
-    gfp_t alloc_flags = GFP_ATOMIC;
+    gfp_t alloc_flags = GFP_KERNEL;
     
     binfo = devm_kzalloc(dev, sizeof(*binfo), alloc_flags);
     if (unlikely(!binfo)) {
@@ -353,7 +354,7 @@ struct pci_epf_blockpt_info *alloc_pci_epf_blockpt_info(struct pci_epf_blockpt *
 	goto release_page;
     }
 
-    dma_addr = dma_map_single(dma_dev, page_address(page), descr->len, DMA_BIDIRECTIONAL);
+    dma_addr = dma_map_single(dma_dev, page_address(page), size, DMA_BIDIRECTIONAL);
     if (dma_mapping_error(dma_dev, dma_addr)) {
 	dev_err(dev, "Failed to map buffer addr\n");
 	goto free_epc_mem;
@@ -402,105 +403,10 @@ static void pci_epf_blockpt_transfer_complete(struct bio *bio)
 
 static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
 {
-	int count;
-	u32 command;
 	struct pci_epf_blockpt *epf_bio = container_of(work, struct pci_epf_blockpt,
 						     cmd_handler.work);
-	struct pci_epf *epf = epf_bio->epf;
-	struct device *dev = &epf->dev;
-	struct pci_epc *epc = epf->epc;
-	enum pci_barno bio_reg_bar = epf_bio->bio_reg_bar;
-	struct pci_epf_blockpt_reg *reg = epf_bio->reg[bio_reg_bar];
-	struct pci_epf_blockpt_descr __iomem *descr;
-	struct pci_blockpt_driver_ring *drv_ring;
-	int ret;
-	struct pci_blockpt_driver_ring_entry *de;
-	struct pci_epf_blockpt_info *bio_info;
-	int delay_ms = DEFAULT_WORK_DELAY_MS;
-	
 	if (epf_bio->state == PCI_BLOCKPT_SETUP)
 	    return pci_epf_setup(epf_bio);
-	
-/* 	command = reg->command; */
-
-/* 	drv_ring = get_driver_ring(epf_bio);	 */
-
-/* 	reg->command = 0; */
-/* 	reg->status = 0; */
-
-/* 	if (command & COMMAND_RAISE_MSI_IRQ) { */
-/* 		count = pci_epc_get_msi(epc, epf->func_no, epf->vfunc_no); */
-/* 		if (reg->irq_number > count || count <= 0) */
-/* 			goto reset_handler; */
-/* 		reg->status = STATUS_IRQ_RAISED; */
-/* 		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no, */
-/* 				  PCI_EPC_IRQ_MSI, reg->irq_number); */
-/* 		goto reset_handler; */
-/* 	} */
-
-/* 	if (command & COMMAND_RAISE_MSIX_IRQ) { */
-/* 		count = pci_epc_get_msix(epc, epf->func_no, epf->vfunc_no); */
-/* 		if (reg->irq_number > count || count <= 0) */
-/* 			goto reset_handler; */
-/* 		reg->status = STATUS_IRQ_RAISED; */
-/* 		pci_epc_raise_irq(epc, epf->func_no, epf->vfunc_no, */
-/* 				  PCI_EPC_IRQ_MSIX, reg->irq_number); */
-/* 		goto reset_handler; */
-/* 	} */
-
-/* 	if (epf_bio->drv_idx != drv_ring->idx) { */
-/* 	    dev_dbg(dev, "New entry in driver ring to process. Internal counter = %i, driver counter = %i\n", epf_bio->drv_idx, drv_ring->idx); */
-/* 	    while (epf_bio->drv_idx != drv_ring->idx) { */
-/* 		de = &drv_ring->ring[epf_bio->drv_idx]; */
-/* 		descr = &epf_bio->descr[de->index]; */
-/* 		dev_dbg(dev, "Driver ring Index to process: %i, flags: %i\n", de->index, de->flags); */
-/* 		dev_dbg(dev, "DescrInfo:  sector: 0x%llX, len: 0x%x, dir: %s\n", descr->s_sector, descr->len, (descr->opf == WRITE) ? "WRITE" : "READ"); */
-/* 		bio_info = alloc_pci_epf_blockpt_info(epf_bio, descr->len, descr, de->index); */
-/* 		if (unlikely(!bio_info)) { */
-/* 		    dev_err(dev, "Unable to allocate bio_info\n"); */
-/* 		    delay_ms = LONG_WORK_DELAY_MS; */
-/* 		    goto reset_handler; */
-/* 		} */
-
-/* 		bio_set_dev(bio_info->bio, epf_bio->real_bd); */
-/* 		bio_info->bio->bi_iter.bi_sector = descr->s_sector; */
-/* 		/\*FIXME: HACK*\/ */
-/* 		bio_info->bio->bi_opf = (descr->opf == WRITE) ? REQ_OP_WRITE : REQ_OP_READ; */
-/* 		if (descr->opf == WRITE) { */
-/* 		    ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, descr->addr, descr->len); */
-		    
-/* 		    if (ret) { */
-/* 			dev_err(dev, "Failed to map queue address\n"); */
-/* 			free_epf_bio_info(bio_info); */
-/* 			delay_ms = LONG_WORK_DELAY_MS; */
-/* 			goto reset_handler; */
-/* 		    } */
-/* //#ifdef USE_DMA */
-/* #if 0		     */
-/* 		    ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, page_to_phys(bio_info->page), descr->len, &bio_info->dma_transfer_complete); */
-/* 		    if (ret) { */
-/* 			dev_err(dev, "Failed to start single DMA read\n"); */
-/* 		    } else { */
-/* 			ret = wait_for_completion_interruptible(&bio_info->dma_transfer_complete); */
-/* 			if (ret < 0) */
-/* 			    dev_err(dev, "DMA wait_for_completion Timed out\n"); */
-/* 		    } */
-/* #else */
-/* 		    memcpy_fromio(page_address(bio_info->page), bio_info->addr, descr->len); */
-/* #endif */
-/* 		} */
-		
-/* 		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % epf_bio->num_desc; */
-/* 		bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete; */
-/* 		bio_info->bio->bi_private = bio_info; */
-/* 		bio_add_page(bio_info->bio, bio_info->page, descr->len, descr->offset); */
-/* 		submit_bio(bio_info->bio); */
-/* 	    } */
-/* 	} */
-
-/* reset_handler: */
-/* 	queue_delayed_work(kpciblockpt_wq, &epf_bio->cmd_handler, */
-/* 			   msecs_to_jiffies(delay_ms)); */
 }
 
 static void pci_epf_blockpt_unbind(struct pci_epf *epf)
@@ -665,9 +571,7 @@ static int pci_epf_blockpt_alloc_space(struct pci_epf *epf)
 	size_t bar_reg_size;
 
 	epc_features = epf_bio->epc_features;
-
 	bio_reg_bar_size = ALIGN(sizeof(struct pci_epf_blockpt_reg), 128);
-
 	msix_capable = epc_features->msix_capable;
 	if (msix_capable) {
 		msix_table_size = PCI_MSIX_ENTRY_SIZE * epf->msix_interrupts;
@@ -675,8 +579,8 @@ static int pci_epf_blockpt_alloc_space(struct pci_epf *epf)
 		/* Align to QWORD or 8 Bytes */
 		pba_size = ALIGN(DIV_ROUND_UP(epf->msix_interrupts, 8), 8);
 	}
+	
 	bar_reg_size = bio_reg_bar_size + msix_table_size + pba_size;
-
 	if (epc_features->bar_fixed_size[bio_reg_bar]) {
 		if (bar_reg_size > bar_size[bio_reg_bar])
 			return -ENOMEM;
@@ -689,8 +593,8 @@ static int pci_epf_blockpt_alloc_space(struct pci_epf *epf)
 		dev_err(dev, "Failed to allocated register space\n");
 		return -ENOMEM;
 	}
-	epf_bio->reg[bio_reg_bar] = base;
 	
+	epf_bio->reg[bio_reg_bar] = base;
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar += add) {
 		epf_bar = &epf->bar[bar];
 		add = (epf_bar->flags & PCI_BASE_ADDRESS_MEM_TYPE_64) ? 2 : 1;
@@ -806,12 +710,10 @@ static int setup_block_device(struct pci_epf_blockpt *bpt)
 				"failed to open block device %s: (%ld)\n",
 				bpt->device_path, err);
 		}
-		goto out_free_dev;
+		goto out_err;
 	}
-
-	spin_lock_init(&bpt->lock);
 	return 0;
-out_free_dev:
+out_err:
 	return err;
 }
 
@@ -824,67 +726,59 @@ static int pci_blockpt_produce(void *cookie)
     struct pci_epc *epc = epf->epc;
     struct pci_blockpt_driver_ring_entry *de;
     struct pci_epf_blockpt_info *bio_info;
+    struct pci_epf_blockpt_descr loc_descr;
     struct pci_epf_blockpt_descr __iomem *descr;
     int ret;
 
     while (!kthread_should_stop()) {
-	/* dev_info_ratelimited(dev, "%s\n", __FUNCTION__); */
-	if (epf_bio->drv_idx != drv_ring->idx) {
-	    dev_dbg(dev, "New entry in driver ring to process. Internal counter = %i, driver counter = %i\n", epf_bio->drv_idx, drv_ring->idx);
-	    while (epf_bio->drv_idx != drv_ring->idx) {
-		de = &drv_ring->ring[epf_bio->drv_idx];
-		descr = &epf_bio->descr[de->index];
-		WARN(!(descr->flags & PBI_EPF_BLOCKPT_F_USED), "Process unused descr %i", epf_bio->drv_idx);
-		dev_dbg(dev, "Driver ring Index to process: %i, flags: %i\n", de->index, de->flags);
-		dev_dbg(dev, "DescrInfo:  sector: 0x%llX, len: 0x%x, dir: %s\n", descr->s_sector, descr->len, (descr->opf == WRITE) ? "WRITE" : "READ");
-		bio_info = alloc_pci_epf_blockpt_info(epf_bio, descr->len, descr, de->index);
-		if (unlikely(!bio_info)) {
-		    dev_err(dev, "Unable to allocate bio_info\n");
+	while (epf_bio->drv_idx != ioread16(&drv_ring->idx)) {
+	    de = &drv_ring->ring[epf_bio->drv_idx];
+	    descr = &epf_bio->descr[ioread16(&de->index)];
+	    memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
+		
+	    BUG_ON(!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED));
+	    
+	    bio_info = alloc_pci_epf_blockpt_info(epf_bio, loc_descr.len, descr, de->index);
+	    if (unlikely(!bio_info)) {
+		dev_err(dev, "Unable to allocate bio_info\n");
+		goto end;
+	    }
+
+	    bio_set_dev(bio_info->bio, epf_bio->real_bd);
+	    bio_info->bio->bi_iter.bi_sector = loc_descr.s_sector;
+	    /*FIXME: HACK*/
+	    bio_info->bio->bi_opf = loc_descr.opf == WRITE ? REQ_OP_WRITE : REQ_OP_READ;
+	    if (loc_descr.opf == WRITE) {
+		ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, loc_descr.addr, loc_descr.len);
+		if (ret) {
+		    dev_err(dev, "Failed to map descriptor: %i\n", ret);
+		    free_epf_bio_info(bio_info);
 		    goto end;
 		}
-
-		bio_set_dev(bio_info->bio, epf_bio->real_bd);
-		bio_info->bio->bi_iter.bi_sector = descr->s_sector;
-		/*FIXME: HACK*/
-		bio_info->bio->bi_opf = (descr->opf == WRITE) ? REQ_OP_WRITE : REQ_OP_READ;
-		if (descr->opf == WRITE) {
-		    ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, descr->addr, descr->len);
-		    
-		    if (ret) {
-			dev_err(dev, "Failed to map queue address\n");
-			free_epf_bio_info(bio_info);
-			goto end;
-		    }
 //#ifdef USE_DMA
 #if 0		    
-		    ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, page_to_phys(bio_info->page), descr->len, &bio_info->dma_transfer_complete);
-		    if (ret) {
-			dev_err(dev, "Failed to start single DMA read\n");
-		    } else {
-			ret = wait_for_completion_interruptible(&bio_info->dma_transfer_complete);
-			if (ret < 0)
-			    dev_err(dev, "DMA wait_for_completion Timed out\n");
-		    }
-#else
-		    memcpy_fromio(page_address(bio_info->page), bio_info->addr,
-				  descr->len);
-#endif
+		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, page_to_phys(bio_info->page), descr->len, &bio_info->dma_transfer_complete);
+		if (ret) {
+		    dev_err(dev, "Failed to start single DMA read\n");
+		} else {
+		    ret = wait_for_completion_interruptible(&bio_info->dma_transfer_complete);
+		    if (ret < 0)
+			dev_err(dev, "DMA wait_for_completion Timed out\n");
 		}
-
-		dev_dbg(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de->index);
-		epf_bio->drv_idx = (epf_bio->drv_idx + 1) % epf_bio->num_desc;
-		bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
-		bio_info->bio->bi_private = bio_info;
-		bio_add_page(bio_info->bio, bio_info->page, descr->len,
-			     descr->offset);
-		bio_get(bio_info->bio);
-		ret = submit_bio(bio_info->bio);
+#else
+		memcpy_fromio(page_address(bio_info->page), bio_info->addr, loc_descr.len);
+#endif
 	    }
-end:
-	    usleep_range(5000, 10000);
-	} else {
-	    usleep_range(5000, 10000);
+
+	    dev_dbg(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de->index);
+	    epf_bio->drv_idx = (epf_bio->drv_idx + 1) % epf_bio->num_desc;
+	    bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
+	    bio_info->bio->bi_private = bio_info;
+	    bio_add_page(bio_info->bio, bio_info->page, loc_descr.len, loc_descr.offset);
+	    submit_bio(bio_info->bio);
 	}
+      end:
+	usleep_range(5000, 10000);
     }
     return 0;
 }
@@ -896,7 +790,8 @@ static int pci_blockpt_digest(void *cookie)
 	struct pci_blockpt_device_ring __iomem *dev_ring = get_device_ring(ebio);
 	struct pci_epf *epf = ebio->epf;
 	struct pci_epf_blockpt_info *bi;
-	char *buf;
+	__maybe_unused char *buf;
+	struct pci_epf_blockpt_descr loc_descr;
 	int ret;
 	
 	allow_signal(SIGINT);
@@ -917,9 +812,14 @@ static int pci_blockpt_digest(void *cookie)
 		usleep_range(1000, 5000);
 		continue;
 	    }
-
-	    if (bi->descr->opf == READ) {
-		ret = pci_epc_map_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr, bi->descr->addr, bi->descr->len);
+	    memcpy_fromio(&loc_descr, bi->descr, sizeof(loc_descr));
+	    if (!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED)) {
+		dev_crit(dev, "Invalid Descriptor @ %i. Flags: 0x%x\n", bi->descr_idx, bi->descr->flags);
+		BUG();
+	    }
+	    /* BUG_ON(!(bi->descr->flags & PBI_EPF_BLOCKPT_F_USED)); */
+	    if (loc_descr.opf == READ) {
+		ret = pci_epc_map_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr, loc_descr.addr, loc_descr.len);
 
 		if (ret) {
 		    dev_err(dev, "Failed to map buffer address\n");
@@ -927,9 +827,11 @@ static int pci_blockpt_digest(void *cookie)
 		}
 
 #ifdef USE_DMA
-		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 0, bi->dma_addr, bi->phys_addr, bi->descr->len, &bi->dma_transfer_complete);
+		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 0, bi->dma_addr, bi->phys_addr, loc_descr.len, &bi->dma_transfer_complete);
 		if (ret) {
 		    dev_err(dev, "Failed to start single DMA read: %i\n", ret);
+		    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr);
+		    continue;
 		} else {
 		    /* cond_resched(); */
 		    ret = wait_for_completion_interruptible_timeout(&bi->dma_transfer_complete, msecs_to_jiffies(10));
@@ -947,12 +849,10 @@ static int pci_blockpt_digest(void *cookie)
 
 	    }
 	    dev_dbg(dev, "Consume (%i)\n", bi->descr_idx);
-	    /* spin_lock(&ebio->lock); */
-	    dev_ring->ring[ebio->dev_idx].index = bi->descr_idx;
-	    dev_ring->idx = ebio->dev_idx = (ebio->dev_idx + 1) % ebio->num_desc;
-	    /* spin_unlock(&ebio->lock); */
+	    iowrite16(bi->descr_idx, &dev_ring->ring[ebio->dev_idx].index);
+	    ebio->dev_idx = (ebio->dev_idx + 1) % ebio->num_desc;
+	    iowrite16(ebio->dev_idx, &dev_ring->idx);
 	    free_epf_bio_info(bi);
-	    	    
 	}
 
 	return 0;
@@ -970,7 +870,8 @@ static int pci_epf_blockpt_probe(struct pci_epf *epf)
 
 	epf->header = &pci_blockpt_header;
 	bpt->epf = epf;
-	
+	spin_lock_init(&bpt->lock);
+
 	INIT_LIST_HEAD(&bpt->proc_list);
 	INIT_DELAYED_WORK(&bpt->cmd_handler, pci_epf_blockpt_cmd_handler);
 
