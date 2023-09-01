@@ -58,6 +58,7 @@ static char *pt_block_dev_name = "/dev/nvme0n1";
 #define COMMAND_ADD_DRV_ENTRY           BIT(7)
 #define COMMAND_START                   BIT(8)
 
+#define STATUS_SUCCESS	                BIT(0)
 #define STATUS_IRQ_RAISED		BIT(6)
 #define STATUS_QUEUE_ADDR_INVALID	BIT(9)
 
@@ -237,62 +238,47 @@ static void pci_epf_setup(struct pci_epf_blockpt *epf_bio)
     struct pci_epf *epf = epf_bio->epf;
     struct pci_epf_blockpt_reg *reg = epf_bio->reg[bio_reg_bar];
     struct device *dev = &epf->dev;
-    struct pci_blockpt_driver_ring *drv_ring;
-    struct pci_epf_blockpt_descr __iomem *descr;
-    int i;
     
     command = reg->command;
 
     if (!command)
 	goto reset_handler;
 
-    reg->command = 0;
-    reg->status = 0;
+    iowrite32(0, &reg->command);
+    iowrite32(0, &reg->status);
 
-    if (command & COMMAND_ADD_DRV_ENTRY) {
-	dev_dbg(dev, "-> Received new driver entry\n");
-	drv_ring = get_driver_ring(epf_bio);
-	dev_dbg(dev, "Received new index = %i\n", drv_ring->idx);
-    }
-
-    	
-    if (command & COMMAND_WRITE_TO_QUEUE) {
-	for (i = 0; i < 16; ++i) {
-	    descr = &epf_bio->descr[i];
-	    descr->addr = 0xa5a5a5a5 + i;
-	    descr->s_sector = 0xa5;
-	    descr->offset = 0x5a;
-	    descr->len = 0x5a;
-	}
-    }
-	
     if (command & COMMAND_SET_QUEUE) {
-	dev_dbg(dev, "mapping Queue to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, reg->queue_size);
+	dev_dbg(dev, "mapping queue to physical address: 0x%llX with size = 0x%llX\n", reg->queue_addr, reg->queue_size);
 	if (epf_bio->descr_addr != 0) {
 	    dev_err(dev, "QUEUE is already mapped: 0x%llX\n", epf_bio->descr_addr);
 	    goto reset_handler;
 	}
 	
-	epf_bio->num_desc = reg->num_desc;
+	epf_bio->num_desc = ioread32(&reg->num_desc);
 	if (epf_bio->num_desc <= 0) {
 	    dev_emerg(dev, "number of descriptors is invalid: %i\n", epf_bio->num_desc);
 	    goto reset_handler;
 	}
-	epf_bio->descr_addr = reg->queue_addr;
-	epf_bio->descr_size = reg->queue_size;
-	epf_bio->drv_offset = reg->drv_offset;
-	epf_bio->dev_offset = reg->dev_offset;
+	
+	epf_bio->descr_addr = ioread64(&reg->queue_addr);
+	epf_bio->descr_size = ioread32(&reg->queue_size);
+	epf_bio->drv_offset = ioread32(&reg->drv_offset);
+	epf_bio->dev_offset = ioread32(&reg->dev_offset);
 	pci_epf_blockpt_map_queue(epf_bio, reg);
+	iowrite32(STATUS_SUCCESS, &reg->status);
     }
 
     if (command & COMMAND_START) {
-	dev_dbg(dev, "Starting Up\n");
 	if (epf_bio->descr_addr == 0) {
 	    dev_err(dev, "Queue is not mapped, cannot start anything\n");
 	    goto reset_handler;
 	}
+	
+	dev_info(dev, "started\n");
+	iowrite32(STATUS_SUCCESS, &reg->status);
 	epf_bio->state = PCI_BLOCKPT_RUNNING;
 	wake_up_process(epf_bio->produce_thr);
+	return;
     }
 
 reset_handler:
@@ -306,8 +292,13 @@ static void free_epf_bio_info(struct pci_epf_blockpt_info *info)
 
     dma_unmap_single(dma_dev, info->dma_addr, info->size, DMA_BIDIRECTIONAL);
 
-    pci_epc_unmap_addr(info->epf_bio->epf->epc, info->epf_bio->epf->func_no, info->epf_bio->epf->vfunc_no, info->phys_addr);
-    pci_epc_mem_free_addr(info->epf_bio->epf->epc, info->phys_addr, info->addr, info->size);
+    if (info->bio->bi_opf == REQ_OP_READ) {
+	pci_epc_unmap_addr(info->epf_bio->epf->epc, info->epf_bio->epf->func_no,
+			   info->epf_bio->epf->vfunc_no, info->phys_addr);
+	pci_epc_mem_free_addr(info->epf_bio->epf->epc, info->phys_addr,
+			      info->addr, info->size);
+    }
+    
     __free_pages(info->page, info->page_order);
     
     spin_lock_irq(&info->epf_bio->lock);
@@ -396,7 +387,6 @@ static void pci_epf_blockpt_transfer_complete(struct bio *bio)
     spin_lock(&binfo->epf_bio->lock);
     list_add_tail(&binfo->node, &binfo->epf_bio->proc_list);
     spin_unlock(&binfo->epf_bio->lock);
-    /* wakeup task*/
     wake_up_process(binfo->epf_bio->digest_thr);
 }
 
@@ -584,6 +574,7 @@ static int pci_epf_blockpt_alloc_space(struct pci_epf *epf)
 	if (epc_features->bar_fixed_size[bio_reg_bar]) {
 		if (bar_reg_size > bar_size[bio_reg_bar])
 			return -ENOMEM;
+		
 		bar_reg_size = bar_size[bio_reg_bar];
 	}
 
@@ -598,7 +589,6 @@ static int pci_epf_blockpt_alloc_space(struct pci_epf *epf)
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar += add) {
 		epf_bar = &epf->bar[bar];
 		add = (epf_bar->flags & PCI_BASE_ADDRESS_MEM_TYPE_64) ? 2 : 1;
-
 		if (bar == bio_reg_bar)
 			continue;
 
@@ -735,7 +725,7 @@ static int pci_blockpt_produce(void *cookie)
 	    de = &drv_ring->ring[epf_bio->drv_idx];
 	    descr = &epf_bio->descr[ioread16(&de->index)];
 	    memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
-		
+
 	    BUG_ON(!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED));
 	    
 	    bio_info = alloc_pci_epf_blockpt_info(epf_bio, loc_descr.len, descr, de->index);
@@ -746,7 +736,6 @@ static int pci_blockpt_produce(void *cookie)
 
 	    bio_set_dev(bio_info->bio, epf_bio->real_bd);
 	    bio_info->bio->bi_iter.bi_sector = loc_descr.s_sector;
-	    /*FIXME: HACK*/
 	    bio_info->bio->bi_opf = loc_descr.opf == WRITE ? REQ_OP_WRITE : REQ_OP_READ;
 	    if (loc_descr.opf == WRITE) {
 		ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, loc_descr.addr, loc_descr.len);
@@ -755,8 +744,7 @@ static int pci_blockpt_produce(void *cookie)
 		    free_epf_bio_info(bio_info);
 		    goto end;
 		}
-//#ifdef USE_DMA
-#if 0		    
+#ifdef USE_DMA
 		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, page_to_phys(bio_info->page), descr->len, &bio_info->dma_transfer_complete);
 		if (ret) {
 		    dev_err(dev, "Failed to start single DMA read\n");
@@ -765,6 +753,13 @@ static int pci_blockpt_produce(void *cookie)
 		    if (ret < 0)
 			dev_err(dev, "DMA wait_for_completion Timed out\n");
 		}
+		pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr);
+		pci_epc_mem_free_addr(epf->epc, bio_info->phys_addr, bio_info->addr, bio_info->size);
+		if (ret < 0) {
+		    free_epf_bio_info(bio_info);
+		    goto end;
+		}
+
 #else
 		memcpy_fromio(page_address(bio_info->page), bio_info->addr, loc_descr.len);
 #endif
@@ -778,7 +773,7 @@ static int pci_blockpt_produce(void *cookie)
 	    submit_bio(bio_info->bio);
 	}
       end:
-	usleep_range(5000, 10000);
+	usleep_range(500, 1000);
     }
     return 0;
 }
@@ -800,24 +795,16 @@ static int pci_blockpt_digest(void *cookie)
 	allow_signal(SIGUSR1);
 
 	while (!kthread_should_stop()) {
-	    /* dev_info_ratelimited(dev, "%s\n", __FUNCTION__); */
-
-	    /* rcu_read_lock(); */
 	    spin_lock_irq(&ebio->lock);
 	    bi = list_first_entry_or_null(&ebio->proc_list, struct pci_epf_blockpt_info, node);
 	    spin_unlock_irq(&ebio->lock);
-	    /* rcu_read_unlock(); */
-
 	    if (bi == NULL) {
 		usleep_range(1000, 5000);
 		continue;
 	    }
+
 	    memcpy_fromio(&loc_descr, bi->descr, sizeof(loc_descr));
-	    if (!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED)) {
-		dev_crit(dev, "Invalid Descriptor @ %i. Flags: 0x%x\n", bi->descr_idx, bi->descr->flags);
-		BUG();
-	    }
-	    /* BUG_ON(!(bi->descr->flags & PBI_EPF_BLOCKPT_F_USED)); */
+	    BUG_ON(!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED));
 	    if (loc_descr.opf == READ) {
 		ret = pci_epc_map_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr, loc_descr.addr, loc_descr.len);
 
@@ -833,7 +820,6 @@ static int pci_blockpt_digest(void *cookie)
 		    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr);
 		    continue;
 		} else {
-		    /* cond_resched(); */
 		    ret = wait_for_completion_interruptible_timeout(&bi->dma_transfer_complete, msecs_to_jiffies(10));
 		    if (ret < 0) {
 			dev_err(dev, "DMA wait_for_completion Timed out\n");

@@ -45,9 +45,7 @@
 
 &pcie1 {
 	compatible = "nxp,s32cc-pcie-ep";
-	/* EP mode only */
-        num-ib-windows = <6>;
-        num-ob-windows = <6>;
+	num-lanes = <2>;
 	status = "okay";
 };
 
