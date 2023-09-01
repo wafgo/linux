@@ -36,7 +36,7 @@
 #define NUM_DESRIPTORS 4096
 
 #define RBD_STATUS_SUCCESS	                BIT(0)
-#define RD_STATUS_TIMEOUT_COUNT                 (1e6)
+#define RD_STATUS_TIMEOUT_COUNT                 (100)
 #define COMMAND_SET_QUEUE BIT(6)
 #define COMMAND_WRITE_TO_QUEUE BIT(4)
 #define COMMAND_READ_FROM_QUEUE BIT(5)
@@ -55,8 +55,6 @@ struct pci_epf_bio_reg {
 	u32 queue_size; /* number of struct pci_epf_bio_descr */
 	u32 drv_offset;
 	u32 dev_offset;
-	u32 irq_type;
-	u32 irq_number;
 	u32 flags;
 	u32 num_desc;
 	u64 queue_addr; /* start of struct pci_epf_bio_descr*/
@@ -77,27 +75,15 @@ struct pci_epf_bio_descr {
         u32 res1;
 };
 
-struct pci_bio_driver_ring_entry {
-	u16 index;
-	u16 flags;
-};
-
-struct pci_bio_device_ring_entry {
-	u16 index;
-	u16 flags;
-};
 
 struct pci_bio_driver_ring {
-	u16 flags;
 	u16 idx;
-	struct pci_bio_driver_ring_entry ring[]; /* queue size*/
+	u16 ring[]; /* queue size*/
 };
 
 struct pci_bio_device_ring {
-	u16 flags;
 	u16 idx;
-	u32 len;
-	struct pci_bio_device_ring_entry ring[]; /* queue size*/
+	u16 ring[]; /* queue size*/
 };
 
 
@@ -199,10 +185,10 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 {
         struct req_iterator iter;
 	struct bio_vec bv;
-
+	int descr_idx;
 	struct pci_remote_disk *rdev = hctx->queue->queuedata;
 	struct pci_remote_disk_request *rb_req = blk_mq_rq_to_pdu(bd->rq);
-	int descr_idx;
+
 	struct device *dev = &rdev->pdev->dev;
 	struct pci_epf_bio_descr __iomem *dtu;
 	struct pci_bio_driver_ring __iomem *drv_ring = pci_rd_get_driver_ring(rdev);
@@ -257,7 +243,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	dtu->s_sector = blk_rq_pos(bd->rq);
 	dtu->tag = (u64)rb_req;
 	spin_lock(&rdev->lock);
-	iowrite16(descr_idx, &drv_ring->ring[rdev->drv_idx].index);
+	iowrite16(descr_idx, &drv_ring->ring[rdev->drv_idx]);
 	rdev->drv_idx = (rdev->drv_idx + 1) % NUM_DESRIPTORS;
 	smp_wmb();
 	iowrite16(rdev->drv_idx, &drv_ring->idx);
@@ -354,7 +340,6 @@ static void pci_rd_clear_descriptor(struct pci_remote_disk *rdev, struct pci_epf
 {
     unsigned long flags;
     spin_lock_irqsave(&rdev->lock, flags);
-    /* descr->flags &= ~PBI_EPF_BIO_F_USED; */
     memset(descr, 0, sizeof(*descr));
     spin_unlock_irqrestore(&rdev->lock, flags);
 }
@@ -375,7 +360,7 @@ static int pci_remote_bd_dispatch(void *cookie)
 
     while (!kthread_should_stop()) {
 	while (ioread16(&dev_ring->idx) != rdev->dev_idx) {
-	    int descr_idx = dev_ring->ring[rdev->dev_idx].index;
+	    u16 descr_idx = ioread16(&dev_ring->ring[rdev->dev_idx]);
 	    struct pci_epf_bio_descr *desc = &rdev->descr_ring[descr_idx];
 	    struct pci_remote_disk_request *rb_req = (struct pci_remote_disk_request *)desc->tag;
 	    struct request *rq = blk_mq_rq_from_pdu(rb_req);
@@ -416,13 +401,13 @@ static int pci_remote_bd_dispatch(void *cookie)
 static int pci_remote_bd_send_command(struct pci_remote_disk *rdev, u32 cmd)
 {
     int timeout = 0;
-    struct device *dev = &rdev->pdev->dev;
     
     iowrite32(cmd, &rdev->base->command);
-    while(++timeout < RD_STATUS_TIMEOUT_COUNT && ioread32(&rdev->base->status) != RBD_STATUS_SUCCESS);
+    while(++timeout < RD_STATUS_TIMEOUT_COUNT && ioread32(&rdev->base->status) != RBD_STATUS_SUCCESS)   {
+	usleep_range(100, 200);
+    }
 
     if (ioread32(&rdev->base->status) != RBD_STATUS_SUCCESS) {
-	dev_err(dev, "cannot set queue address\n");
 	return -ENODEV;
     }
 	
@@ -457,12 +442,11 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	rdev->descr_size =
 		ALIGN(NUM_DESRIPTORS * sizeof(*rdev->descr_ring), sizeof(u64)) +
 		ALIGN(sizeof(struct pci_bio_driver_ring) +
-			      (NUM_DESRIPTORS *
-			       sizeof(struct pci_bio_driver_ring_entry)),
+		      (NUM_DESRIPTORS * sizeof(u16)),
 		      sizeof(u64)) +
 		ALIGN(sizeof(struct pci_bio_device_ring) +
 			      (NUM_DESRIPTORS *
-			       sizeof(struct pci_bio_device_ring_entry)),
+			       sizeof(u16)),
 		      sizeof(u64));
 
 	rdev->dp_order = get_order(rdev->descr_size);
@@ -551,7 +535,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 
 	iowrite64(phys_addr, &rdev->base->queue_addr);
 	iowrite32(rdev->descr_size, &rdev->base->queue_size);
-	iowrite32(NUM_DESRIPTORS, &rdev->base->queue_size);
+	iowrite32(NUM_DESRIPTORS, &rdev->base->num_desc);
 	smp_wmb();
 	err = pci_remote_bd_send_command(rdev, COMMAND_SET_QUEUE);
 	if (err) {

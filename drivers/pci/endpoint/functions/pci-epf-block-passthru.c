@@ -6,7 +6,6 @@
  * Author: Wadim Mueller <wadim.mueller@continental.com>
  */
 
-/* #define DEBUG 1 */
 #include <linux/crc32.h>
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
@@ -80,27 +79,14 @@ struct pci_epf_blockpt_descr {
     u32 res1;
 };
 
-struct pci_blockpt_driver_ring_entry {
-    u16 index;
-    u16 flags;
-};
-
-struct pci_blockpt_device_ring_entry {
-    u16 index;
-    u16 flags;
-};
-
 struct pci_blockpt_driver_ring {
-    u16 flags;
     u16 idx;
-    struct pci_blockpt_driver_ring_entry ring[]; /* queue size*/
+    u16 ring[]; /* queue size*/
 };
 
 struct pci_blockpt_device_ring {
-    u16 flags;
     u16 idx;
-    u32 len;
-    struct pci_blockpt_device_ring_entry ring[]; /* queue size*/
+    u16 ring[]; /* queue size*/
 };
 
 enum cmd_state {
@@ -139,8 +125,6 @@ struct pci_epf_blockpt_reg {
         u32     queue_size;  /* number of struct pci_epf_blockpt_descr */
         u32     drv_offset;
         u32     dev_offset;
-	u32	irq_type;
-	u32	irq_number;
 	u32	flags;
         u32	num_desc;
         u64	queue_addr;  /* start of struct pci_epf_blockpt_descr*/
@@ -714,7 +698,7 @@ static int pci_blockpt_produce(void *cookie)
     struct pci_blockpt_driver_ring __iomem *drv_ring = get_driver_ring(epf_bio);
     struct pci_epf *epf = epf_bio->epf;
     struct pci_epc *epc = epf->epc;
-    struct pci_blockpt_driver_ring_entry *de;
+    u16 de;
     struct pci_epf_blockpt_info *bio_info;
     struct pci_epf_blockpt_descr loc_descr;
     struct pci_epf_blockpt_descr __iomem *descr;
@@ -722,13 +706,13 @@ static int pci_blockpt_produce(void *cookie)
 
     while (!kthread_should_stop()) {
 	while (epf_bio->drv_idx != ioread16(&drv_ring->idx)) {
-	    de = &drv_ring->ring[epf_bio->drv_idx];
-	    descr = &epf_bio->descr[ioread16(&de->index)];
+	    de = ioread16(&drv_ring->ring[epf_bio->drv_idx]);
+	    descr = &epf_bio->descr[de];
 	    memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
 
 	    BUG_ON(!(loc_descr.flags & PBI_EPF_BLOCKPT_F_USED));
 	    
-	    bio_info = alloc_pci_epf_blockpt_info(epf_bio, loc_descr.len, descr, de->index);
+	    bio_info = alloc_pci_epf_blockpt_info(epf_bio, loc_descr.len, descr, de);
 	    if (unlikely(!bio_info)) {
 		dev_err(dev, "Unable to allocate bio_info\n");
 		goto end;
@@ -765,7 +749,7 @@ static int pci_blockpt_produce(void *cookie)
 #endif
 	    }
 
-	    dev_dbg(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de->index);
+	    dev_dbg(dev, "Prod %i (%i)\n", epf_bio->drv_idx, de);
 	    epf_bio->drv_idx = (epf_bio->drv_idx + 1) % epf_bio->num_desc;
 	    bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
 	    bio_info->bio->bi_private = bio_info;
@@ -835,7 +819,7 @@ static int pci_blockpt_digest(void *cookie)
 
 	    }
 	    dev_dbg(dev, "Consume (%i)\n", bi->descr_idx);
-	    iowrite16(bi->descr_idx, &dev_ring->ring[ebio->dev_idx].index);
+	    iowrite16(bi->descr_idx, &dev_ring->ring[ebio->dev_idx]);
 	    ebio->dev_idx = (ebio->dev_idx + 1) % ebio->num_desc;
 	    iowrite16(ebio->dev_idx, &dev_ring->idx);
 	    free_epf_bio_info(bi);
