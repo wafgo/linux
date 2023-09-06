@@ -33,7 +33,7 @@
 
 
 #define RBD_MAGIC 0x636f6e74
-#define NUM_DESRIPTORS 4096
+#define NUM_DESRIPTORS 1024
 
 #define RBD_STATUS_SUCCESS	                BIT(0)
 #define RD_STATUS_TIMEOUT_COUNT                 (100)
@@ -116,6 +116,7 @@ struct pci_remote_disk {
 	u32 dev_offset;
 	u32 drv_idx;
 	u32 dev_idx;
+        u16 ns_idx;
 	struct task_struct *dp_thr;
 	const struct blk_mq_queue_data *bd;
 };
@@ -123,7 +124,7 @@ struct pci_remote_disk {
 struct pci_remote_disk_request {
 	struct pci_remote_disk *rdev;
 	struct bio *bio;
-	u8 status;
+	blk_status_t status;
 	struct page *pg;
 	int order;
 	int num_bios;
@@ -154,25 +155,29 @@ static struct pci_bio_device_ring * pci_rd_get_device_ring(struct pci_remote_dis
 					      rdev->dev_offset);
 }
 
-static int pci_rd_get_and_mark_free_descriptor(struct pci_remote_disk *rdev)
+static int pci_rd_alloc_free_descriptor(struct pci_remote_disk *rdev)
 {
-	int i;
+        int i;
+	int ret = -ENOSPC;
 	struct device *dev = &rdev->pdev->dev;
 	spin_lock(&rdev->lock);
 	for (i = 0; i < NUM_DESRIPTORS; ++i) {
-		struct pci_epf_bio_descr __iomem *de = &rdev->descr_ring[i];
+		struct pci_epf_bio_descr __iomem *de = &rdev->descr_ring[rdev->ns_idx];
 		u32 flags = READ_ONCE(de->flags);
 		if (!(flags & PBI_EPF_BIO_F_USED)) {
-			dev_dbg(dev, "Found free descriptor at idx %i\n", i);
+			dev_dbg(dev, "Found free descriptor at idx %i\n", rdev->ns_idx);
 			WRITE_ONCE(de->flags, flags | PBI_EPF_BIO_F_USED);
-			spin_unlock(&rdev->lock);
-			return i;
+			ret = rdev->ns_idx;
+			rdev->ns_idx = (rdev->ns_idx + 1) % NUM_DESRIPTORS;
+			goto unlock_return;
 		}
+		rdev->ns_idx = (rdev->ns_idx + 1) % NUM_DESRIPTORS;
 	}
-
+unlock_return:
 	spin_unlock(&rdev->lock);
-	dev_err(dev, "%s Unable to find free descriptor\n", __FUNCTION__);
-	return -ENOSPC;
+	if (ret == -ENOSPC)
+	    dev_err(dev, "No free descriptor\n");
+	return ret;
 }
 
 static bool is_valid_request(unsigned int op)
@@ -195,7 +200,6 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	dma_addr_t dma_addr;
 	char *buf;
 	int err;
-	int i = 0;
 
 	rb_req->rdev = rdev;
 	if (!is_valid_request(req_op(bd->rq))) {
@@ -203,7 +207,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	    return BLK_STS_NOTSUPP;
 	}
 
-	descr_idx = pci_rd_get_and_mark_free_descriptor(rdev);
+	descr_idx = pci_rd_alloc_free_descriptor(rdev);
 	if (unlikely(descr_idx < 0))
 	    return BLK_STS_AGAIN;
 
@@ -234,19 +238,16 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (dtu->opf == WRITE) {
 	    rq_for_each_segment (bv, bd->rq, iter) {
 		memcpy_from_bvec(buf, &bv);
-		dev_dbg(dev,"WRITE: %i: bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX. sec: 0x%llX, len: 0x%x\n",
-					 i, bv.bv_len, bv.bv_offset, page_address(bv.bv_page), buf, blk_rq_pos(bd->rq), blk_rq_bytes(bd->rq));
 		buf += bv.bv_len;
-		i++;
 	    }
 	}
 	dtu->s_sector = blk_rq_pos(bd->rq);
 	dtu->tag = (u64)rb_req;
 	spin_lock(&rdev->lock);
-	iowrite16(descr_idx, &drv_ring->ring[rdev->drv_idx]);
+	writew(descr_idx, &drv_ring->ring[rdev->drv_idx]);
 	rdev->drv_idx = (rdev->drv_idx + 1) % NUM_DESRIPTORS;
 	smp_wmb();
-	iowrite16(rdev->drv_idx, &drv_ring->idx);
+	writew(rdev->drv_idx, &drv_ring->idx);
 	spin_unlock(&rdev->lock);
 	dev_dbg(dev, "(DIR: %s): Adding desc %i (%i). sector: 0x%llX, len: 0x%x, offset: 0x%x\n",
 		 (rq_data_dir(bd->rq) == WRITE) ? "WRITE" : "READ", descr_idx, rdev->drv_idx,
@@ -265,7 +266,7 @@ free_descr:
 static void pci_rd_end_rq(struct request *rq)
 {
 	struct pci_remote_disk_request *rb_req = blk_mq_rq_to_pdu(rq);
-	blk_mq_end_request(rq, rb_req->descr->status);
+	blk_mq_end_request(rq, rb_req->status);
 }
 
 static enum blk_eh_timer_return pci_rd_timeout_rq(struct request *rq, bool res)
@@ -359,8 +360,8 @@ static int pci_remote_bd_dispatch(void *cookie)
     allow_signal(SIGUSR1);
 
     while (!kthread_should_stop()) {
-	while (ioread16(&dev_ring->idx) != rdev->dev_idx) {
-	    u16 descr_idx = ioread16(&dev_ring->ring[rdev->dev_idx]);
+	while (readw(&dev_ring->idx) != rdev->dev_idx) {
+	    u16 descr_idx = readw(&dev_ring->ring[rdev->dev_idx]);
 	    struct pci_epf_bio_descr *desc = &rdev->descr_ring[descr_idx];
 	    struct pci_remote_disk_request *rb_req = (struct pci_remote_disk_request *)desc->tag;
 	    struct request *rq = blk_mq_rq_from_pdu(rb_req);
@@ -387,6 +388,7 @@ static int pci_remote_bd_dispatch(void *cookie)
 			
 	    dma_unmap_single(dev, desc->addr, desc->len,
 			     rq_dma_dir(rq));
+	    rb_req->status = (blk_status_t) readl(&desc->status);
 	    pci_rd_clear_descriptor(rdev, desc);
 	    __free_pages(rb_req->pg, rb_req->order);
 	    WRITE_ONCE(rdev->dev_idx, (rdev->dev_idx + 1) % NUM_DESRIPTORS);
@@ -402,16 +404,16 @@ static int pci_remote_bd_send_command(struct pci_remote_disk *rdev, u32 cmd)
 {
     int timeout = 0;
     
-    iowrite32(cmd, &rdev->base->command);
-    while(++timeout < RD_STATUS_TIMEOUT_COUNT && ioread32(&rdev->base->status) != RBD_STATUS_SUCCESS)   {
+    writel(cmd, &rdev->base->command);
+    while(++timeout < RD_STATUS_TIMEOUT_COUNT && readl(&rdev->base->status) != RBD_STATUS_SUCCESS)   {
 	usleep_range(100, 200);
     }
 
-    if (ioread32(&rdev->base->status) != RBD_STATUS_SUCCESS) {
+    if (readl(&rdev->base->status) != RBD_STATUS_SUCCESS) {
 	return -ENODEV;
     }
 	
-    iowrite32(0, &rdev->base->status);
+    writel(0, &rdev->base->status);
     return 0;
 }
 
@@ -525,17 +527,17 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 						 (NUM_DESRIPTORS * sizeof(u16)),
 					 sizeof(u64));
 
-	iowrite32(rdev->drv_offset, &rdev->base->drv_offset);
-	iowrite32(rdev->dev_offset, &rdev->base->dev_offset);
+	writel(rdev->drv_offset, &rdev->base->drv_offset);
+	writel(rdev->dev_offset, &rdev->base->dev_offset);
 	dev_info(
 		dev,
 		" Setting queue addr @ 0x%llX -> 0x%llx. Queue Size for %i descriptors = %i. Offset = %i\n",
 		rdev->descr_ring, phys_addr, NUM_DESRIPTORS, rdev->descr_size,
 		offset);
 
-	iowrite64(phys_addr, &rdev->base->queue_addr);
-	iowrite32(rdev->descr_size, &rdev->base->queue_size);
-	iowrite32(NUM_DESRIPTORS, &rdev->base->num_desc);
+	writeq(phys_addr, &rdev->base->queue_addr);
+	writel(rdev->descr_size, &rdev->base->queue_size);
+	writel(NUM_DESRIPTORS, &rdev->base->num_desc);
 	smp_wmb();
 	err = pci_remote_bd_send_command(rdev, COMMAND_SET_QUEUE);
 	if (err) {

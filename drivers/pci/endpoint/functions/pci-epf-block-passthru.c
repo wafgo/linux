@@ -188,8 +188,8 @@ static int pci_epf_blockpt_map_queue(struct pci_epf_blockpt *bpt, struct pci_epf
 	}
 
 	bpt->descr = addr;
-	bpt->driver_ring = (struct pci_blockpt_driver_ring *)((u64)addr + ioread32(&reg->drv_offset));
-	bpt->device_ring = (struct pci_blockpt_device_ring *)((u64)addr + ioread32(&reg->dev_offset));
+	bpt->driver_ring = (struct pci_blockpt_driver_ring *)((u64)addr + readl(&reg->drv_offset));
+	bpt->device_ring = (struct pci_blockpt_device_ring *)((u64)addr + readl(&reg->dev_offset));
 
 	dev_dbg(dev, "\tQueue => Queue Address physical: 0x%llX\t Queue Address virt: 0x%llX\t Queue PCI Addr: 0x%llX\n",
 		phys_addr, addr, bpt->descr_addr);
@@ -208,13 +208,13 @@ static void pci_epf_setup(struct pci_epf_blockpt *bpt)
     struct pci_epf_blockpt_reg *reg = bpt->reg[bio_reg_bar];
     struct device *dev = &epf->dev;
     
-    command = ioread32(&reg->command);
+    command = readl(&reg->command);
 
     if (!command)
 	goto reset_handler;
 
-    iowrite32(0, &reg->command);
-    iowrite32(0, &reg->status);
+    writel(0, &reg->command);
+    writel(0, &reg->status);
 
     if (command & COMMAND_SET_QUEUE) {
 	dev_dbg(dev, "mapping Queue to physical address: 0x%llX. Size = 0x%llX\n", reg->queue_addr, reg->queue_size);
@@ -223,14 +223,14 @@ static void pci_epf_setup(struct pci_epf_blockpt *bpt)
 	    goto reset_handler;
 	}
 	
-	bpt->num_desc = ioread32(&reg->num_desc);
+	bpt->num_desc = readl(&reg->num_desc);
 	
 	BUG_ON(bpt->num_desc <= 0);
 	
-	bpt->descr_addr = ioread64(&reg->queue_addr);
-	bpt->descr_size = ioread32(&reg->queue_size);
+	bpt->descr_addr = readq(&reg->queue_addr);
+	bpt->descr_size = readl(&reg->queue_size);
 	pci_epf_blockpt_map_queue(bpt, reg);
-	iowrite32(BPT_STATUS_SUCCESS, &reg->status);
+	writel(BPT_STATUS_SUCCESS, &reg->status);
     }
 
     if (command & COMMAND_START) {
@@ -240,7 +240,7 @@ static void pci_epf_setup(struct pci_epf_blockpt *bpt)
 	}
 	
 	dev_info(dev, "Started\n");
-	iowrite32(BPT_STATUS_SUCCESS, &reg->status);
+	writel(BPT_STATUS_SUCCESS, &reg->status);
 	bpt->state = PCI_BLOCKPT_RUNNING;
 	wake_up_process(bpt->produce_thr);
 	return;
@@ -595,6 +595,9 @@ static int pci_epf_blockpt_bind(struct pci_epf *epf)
 	if (WARN_ON_ONCE(!epc))
 		return -EINVAL;
 
+	if (WARN_ON_ONCE(!bpt))
+	    return -EINVAL;
+
 	epc_features = pci_epc_get_features(epc, epf->func_no, epf->vfunc_no);
 	if (!epc_features) {
 		dev_err(&epf->dev, "epc_features not implemented\n");
@@ -678,8 +681,8 @@ static int pci_blockpt_produce(void *cookie)
     int ret;
 
     while (!kthread_should_stop()) {
-	while (bpt->drv_idx != ioread16(&drv_ring->idx)) {
-	    de = ioread16(&drv_ring->ring[bpt->drv_idx]);
+	while (bpt->drv_idx != readw(&drv_ring->idx)) {
+	    de = readw(&drv_ring->ring[bpt->drv_idx]);
 	    descr = &bpt->descr[de];
 	    memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
 
@@ -790,9 +793,9 @@ static int pci_blockpt_digest(void *cookie)
 #endif
 
 	    }
-	    iowrite16(bi->descr_idx, &dev_ring->ring[bpt->dev_idx]);
+	    writew(bi->descr_idx, &dev_ring->ring[bpt->dev_idx]);
 	    bpt->dev_idx = (bpt->dev_idx + 1) % bpt->num_desc;
-	    iowrite16(bpt->dev_idx, &dev_ring->idx);
+	    writew(bpt->dev_idx, &dev_ring->idx);
 	    free_bpt_info(bi);
 	}
 
