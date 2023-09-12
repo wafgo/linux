@@ -293,10 +293,7 @@ static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
 	writeb(rdd->id, &base->dev_idx);
 	writel(rdd->drv_offset, &base->drv_offset);
 	writel(rdd->dev_offset, &base->dev_offset);
-	dev_info(
-		dev,
-		"%s: Setting queue addr @ 0x%llX -> 0x%llx. Queue Size for %i descriptors = %i\n", rdd->npr_name,
-		rdd->descr_ring, phys_addr, NUM_DESRIPTORS, rdd->descr_size);
+	dev_info(dev, "%s: Setting queue addr. #Descriptors %i (%i)\n", rdd->npr_name, NUM_DESRIPTORS, rdd->descr_size);
 	writeq(phys_addr, &base->queue_addr);
 	writel(rdd->descr_size, &base->queue_size);
 	writel(NUM_DESRIPTORS, &base->num_desc);
@@ -314,8 +311,7 @@ static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
    	}
 	
 	rdd->capacity = readq(&base->num_sectors);
-	dev_info(dev, "%s has capacity 0x%lx\n", rdd->r_name, rdd->capacity);
-	/* FIXME */
+	dev_info(dev, "%s capacity 0x%lx\n", rdd->r_name, rdd->capacity);
 	ret = pci_remote_bd_send_command(rdd->rcom, COMMAND_START);
 	if (ret) {
 	    dev_err(dev, "%s: cannot start device\n", rdd->npr_name);
@@ -674,19 +670,19 @@ static int pci_remote_parse_disks(struct pci_remote_disk_common *rcom)
 	    goto err_free;
 	}
 	
-	rdd->l_name = kasprintf(GFP_KERNEL, "pci-rd-%s", rdd->r_name);
-	if (!rdd->l_name) {
-	    dev_err(dev, "Could not allocate memory for local device name\n");
-	    err = -ENOMEM;
-	    goto err_free;
-	}
-	
 	spin_lock_init(&rdd->lock);
 	rdd->rcom = rcom;
 	rdd->id = count;
 	/* get rid of all path seperators  */
 	rdd->npr_name = strrchr(rdd->r_name, '/');
 	rdd->npr_name = (rdd->npr_name == NULL) ? rdd->r_name : (rdd->npr_name + 1);
+	rdd->l_name = kasprintf(GFP_KERNEL, "pci-rd-%s", rdd->npr_name);
+	if (!rdd->l_name) {
+	    dev_err(dev, "Could not allocate memory for local device name\n");
+	    err = -ENOMEM;
+	    goto err_free;
+	}
+	
 	config_group_init_type_name(&rdd->cfs_group, rdd->npr_name, &pci_remote_disk_group_type);
 	err = configfs_register_group(&pci_remote_disk_subsys.su_group, &rdd->cfs_group);
 	if (err) {
@@ -695,7 +691,7 @@ static int pci_remote_parse_disks(struct pci_remote_disk_common *rcom)
 	    goto err_free;
 	}
 	
-	dev_info(dev, "Found: %s\n", rdd->r_name);
+	dev_info(dev, "Found %s\n", rdd->r_name);
 	sbd = ebd + 1;
 	count++;
     }

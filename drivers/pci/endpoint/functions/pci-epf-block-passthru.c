@@ -97,18 +97,21 @@ struct pci_epf_blockpt_device {
         u32 descr_size;
         struct pci_blockpt_driver_ring __iomem *driver_ring;
         struct pci_blockpt_device_ring __iomem *device_ring;
+        atomic_t dig_cpu;
         u32 drv_idx;
         u32 dev_idx;
         u32 num_desc;
 	char *device_path;
+        char *dev_name;
         bool read_only;
 #ifdef USE_DMAENGINE	
         struct dma_chan *dma_chan;
 #endif
-        struct list_head        proc_list;
-        struct task_struct      *digest_thr;
+        struct list_head __percpu *proc_list;
+        struct task_struct *digest_thr[NR_CPUS];
         struct task_struct      *produce_thr;
-	spinlock_t lock;
+	spinlock_t __percpu *lock;
+        spinlock_t dev_lock;
         spinlock_t nm_lock; /* node move lock */
 };
 
@@ -247,6 +250,8 @@ static void pci_epf_blockpt_setup(struct pci_blockpt_device_common *dcommon)
     struct pci_epf_blockpt_device *bpt_dev;
     struct device *dev = &epf->dev;
     struct list_head *lh;
+    unsigned int cpu;
+    char tname[64];
     __maybe_unused dma_cap_mask_t mask;
     
     command = readl(&reg->command);
@@ -305,15 +310,18 @@ static void pci_epf_blockpt_setup(struct pci_blockpt_device_common *dcommon)
     }
 
     if (command & COMMAND_START) {
-	bpt_dev->digest_thr = kthread_create(pci_blockpt_digest, bpt_dev, "bpt-digest-%i", bpt_dev->dev_tag);
-	if (IS_ERR(bpt_dev->digest_thr)) {
-	    ret = PTR_ERR(bpt_dev->digest_thr);
-	    dev_err(dev, "%s Could not create digest kernel thread: %i\n", bpt_dev->device_path, ret);
-	    writel(BPT_STATUS_ERROR, &reg->status);
-	    goto reset_handler;
+	for_each_present_cpu(cpu) {
+	    snprintf(tname, sizeof(tname), "bpt-dig-%s.%u", bpt_dev->dev_name, cpu);
+	    bpt_dev->digest_thr[cpu] = kthread_create_on_cpu(pci_blockpt_digest, bpt_dev, cpu, tname);
+	    if (IS_ERR(bpt_dev->digest_thr[cpu])) {
+		ret = PTR_ERR(bpt_dev->digest_thr[cpu]);
+		dev_err(dev, "%s Could not create digest kernel thread: %i\n", bpt_dev->device_path, ret);
+		writel(BPT_STATUS_ERROR, &reg->status);
+		goto reset_handler;
+	    }
 	}
-
-	bpt_dev->produce_thr = kthread_create(pci_blockpt_bio_submit, bpt_dev, "bpt-bio-submit-%i", bpt_dev->dev_tag);
+		
+	bpt_dev->produce_thr = kthread_create(pci_blockpt_bio_submit, bpt_dev, "bpt-bio/%s", bpt_dev->dev_name);
 	if (IS_ERR(bpt_dev->produce_thr)) {
 	    ret = PTR_ERR(bpt_dev->produce_thr);
 	    dev_err(dev, "%s: Could not create bio producer kernel thread %i\n", bpt_dev->device_path, ret);
@@ -361,9 +369,9 @@ static void free_pci_blockpt_info(struct pci_epf_blockpt_info *info)
     }
     
     __free_pages(info->page, info->page_order);
-    spin_lock_irq(&info->bpt_dev->lock);
+    spin_lock_irq(this_cpu_ptr(info->bpt_dev->lock));
     list_del(&info->node);
-    spin_unlock_irq(&info->bpt_dev->lock);
+    spin_unlock_irq(this_cpu_ptr(info->bpt_dev->lock));
     bio_put(info->bio);    
     devm_kfree(dev, info);
 }
@@ -437,14 +445,20 @@ static void pci_epf_blockpt_transfer_complete(struct bio *bio)
 {
     struct pci_epf_blockpt_info *binfo = bio->bi_private;
     struct device *dev = &binfo->bpt_dev->dcommon->epf->dev;
+    /* FIXME  */
+    int cpu = atomic_read(&binfo->bpt_dev->dig_cpu) % 4;
+    struct list_head *cpu_list = per_cpu_ptr(binfo->bpt_dev->proc_list, cpu);
+
+    /* atomic_inc(&binfo->bpt_dev->dig_cpu); */
     if (bio->bi_status != BLK_STS_OK) {
 	dev_err(dev, "BIO error %i\n", bio->bi_status);
     }
 
-    spin_lock(&binfo->bpt_dev->lock);
-    list_add_tail(&binfo->node, &binfo->bpt_dev->proc_list);
-    spin_unlock(&binfo->bpt_dev->lock);
-    wake_up_process(binfo->bpt_dev->digest_thr);
+    spin_lock(per_cpu_ptr(binfo->bpt_dev->lock, cpu));
+    list_add_tail(&binfo->node, cpu_list);
+    spin_unlock(per_cpu_ptr(binfo->bpt_dev->lock, cpu));
+    wake_up_process(binfo->bpt_dev->digest_thr[cpu]);
+    atomic_inc(&binfo->bpt_dev->dig_cpu);
 }
 
 
@@ -804,16 +818,10 @@ static int pci_blockpt_digest(void *__bpt_dev)
 	__maybe_unused dma_cookie_t dma_cookie;
 	__maybe_unused char *buf;
 
-
-	allow_signal(SIGINT);
-	allow_signal(SIGTERM);
-	allow_signal(SIGKILL);
-	allow_signal(SIGUSR1);
-
 	while (!kthread_should_stop()) {
-	    spin_lock_irq(&bpt_dev->lock);
-	    bi = list_first_entry_or_null(&bpt_dev->proc_list, struct pci_epf_blockpt_info, node);
-	    spin_unlock_irq(&bpt_dev->lock);
+	    spin_lock_irq(this_cpu_ptr(bpt_dev->lock));
+	    bi = list_first_entry_or_null(this_cpu_ptr(bpt_dev->proc_list), struct pci_epf_blockpt_info, node);
+	    spin_unlock_irq(this_cpu_ptr(bpt_dev->lock));
 	    if (bi == NULL) {
 		usleep_range(1000, 5000);
 		continue;
@@ -860,23 +868,31 @@ static int pci_blockpt_digest(void *__bpt_dev)
 		}
 #else		
 		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 0, bi->dma_addr, bi->phys_addr, loc_descr.len, &bi->dma_transfer_complete);
-		if (ret) {
-		    dev_err(dev, "Failed to start single DMA read: %i\n", ret);
-		    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr);
-		    continue;
-		} else {
+		if (ret == -EBUSY) {
+		    dev_err(dev, "Use PIO for pci transers\n");
+		    buf = kmap_atomic(bi->page);	
+		    memcpy_toio(bi->addr, buf, bi->descr->len);
+		    kunmap_atomic(buf);
+		} else if (ret == 0) {
 		    ret = wait_for_completion_interruptible_timeout(&bi->dma_transfer_complete, msecs_to_jiffies(10));
 		    if (ret <= 0) {
 			dev_err(dev, "DMA wait_for_completion timeout\n");
 			continue;
 		    } 
+		} else {
+		    dev_err(dev, "Failed to start single DMA read: %i\n", ret);
+		    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr);
+		    continue;
 		}
+		
 #endif		
 
 	    }
+	    spin_lock(&bi->bpt_dev->dev_lock);
 	    writew(bi->descr_idx, &bi->bpt_dev->device_ring->ring[bi->bpt_dev->dev_idx]);
 	    bi->bpt_dev->dev_idx = (bi->bpt_dev->dev_idx + 1) % bi->bpt_dev->num_desc;
 	    writew(bi->bpt_dev->dev_idx, &bi->bpt_dev->device_ring->idx);
+	    spin_unlock(&bi->bpt_dev->dev_lock);
 	    free_pci_blockpt_info(bi);
 	}
 
@@ -907,11 +923,15 @@ static void pci_epf_blockpt_remove(struct pci_epf *epf)
     struct pci_epf_blockpt_device *bpt_dev, *dntmp;
     unsigned long flags;
     struct pci_epf_blockpt_info *bio_info, *bntmp;
+    int cpu;
     struct device *dev = &dcommon->epf->dev;
     
     list_for_each_entry_safe(bpt_dev, dntmp, &dcommon->devices, node) {
 	kthread_stop(bpt_dev->produce_thr);
-	kthread_stop(bpt_dev->digest_thr);
+
+	for_each_present_cpu (cpu) {
+	    kthread_stop(bpt_dev->digest_thr[cpu]);
+	}
 	
 	blkdev_put(bpt_dev->bd, bpt_dev->read_only ? FMODE_READ : (FMODE_READ | FMODE_WRITE));
 	
@@ -921,8 +941,11 @@ static void pci_epf_blockpt_remove(struct pci_epf *epf)
 	
 	synchronize_rcu();
 
-	list_for_each_entry_safe(bio_info, bntmp, &bpt_dev->proc_list, node) {
-	    free_pci_blockpt_info(bio_info);
+	for_each_present_cpu (cpu) {
+	    list_for_each_entry_safe (bio_info, bntmp, per_cpu_ptr(bpt_dev->proc_list, cpu),
+				      node) {
+		    free_pci_blockpt_info(bio_info);
+	    }
 	}
 
 	kfree(bpt_dev->cfs_disk_name);
@@ -967,6 +990,18 @@ static ssize_t pci_blockpt_disc_name_store(struct config_item *item,
 
     bpt_dev->bd = blkdev;
     bpt_dev->device_path = kasprintf(GFP_KERNEL, "%s", page);
+    if (unlikely(!bpt_dev->device_path)) {
+	dev_err(dev, "Unable to allocate memory for device path\n");
+	return 0;
+    }
+    
+    bpt_dev->dev_name = strrchr(bpt_dev->device_path, '/');
+    if (unlikely(!bpt_dev->dev_name))
+	bpt_dev->dev_name = bpt_dev->device_path;
+    else
+	bpt_dev->dev_name++;
+	
+    
     spin_lock_irqsave(&bpt_dev->nm_lock, flags);
     list_add_tail_rcu(&bpt_dev->node, &exportable_bds);
     spin_unlock_irqrestore(&bpt_dev->nm_lock, flags);
@@ -1013,7 +1048,8 @@ static struct config_group *pci_epf_blockpt_add_cfs(struct pci_epf *epf, struct 
     struct pci_epf_blockpt_device *bpt_dev;
     struct pci_blockpt_device_common *dcommon = epf_get_drvdata(epf);
     struct device *dev = &epf->dev;
-
+    int cpu;
+    
     bpt_dev = devm_kzalloc(dev, sizeof(*bpt_dev), GFP_KERNEL);
     if (!bpt_dev) {
 	dev_err(dev, "Could not alloc bpt device\n");
@@ -1022,10 +1058,20 @@ static struct config_group *pci_epf_blockpt_add_cfs(struct pci_epf *epf, struct 
     
     bpt_dev->cfs_disk_name = kasprintf(GFP_KERNEL, "disc%i", dcommon->next_disc_idx);
     bpt_dev->dcommon = dcommon;
-    spin_lock_init(&bpt_dev->lock);
+    bpt_dev->lock = alloc_percpu(spinlock_t);
+    for_each_possible_cpu (cpu) {
+	spin_lock_init(per_cpu_ptr(bpt_dev->lock, cpu));
+    }
+
+    spin_lock_init(&bpt_dev->dev_lock);
     spin_lock_init(&bpt_dev->nm_lock);
     INIT_LIST_HEAD(&bpt_dev->node);
-    INIT_LIST_HEAD(&bpt_dev->proc_list);
+    bpt_dev->proc_list = alloc_percpu(struct list_head);
+    for_each_possible_cpu (cpu) {
+	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->proc_list, cpu));
+    }
+    
+    /* INIT_LIST_HEAD(&bpt_dev->proc_list); */
     config_group_init_type_name(&bpt_dev->cfg_grp, bpt_dev->cfs_disk_name, &blockpt_disk_type);
     bpt_dev->dev_tag = dcommon->next_disc_idx++;
     

@@ -90,7 +90,7 @@ int dw_pcie_dma_write_soft_reset(struct dma_info *di)
 				DMA_RESET_WAIT_US, DMA_RESET_TIMEOUT_US, 0,
 				di, PCIE_DMA_WRITE_ENGINE_EN);
 
-	di->wr_ch.status = DMA_CH_STOPPED;
+	di->wr_ch[0].status = DMA_CH_STOPPED;
 	/* Pull back the enable bit to 1 */
 	dw_pcie_writel_dma(di, PCIE_DMA_WRITE_ENGINE_EN, BIT(0));
 
@@ -118,7 +118,7 @@ int dw_pcie_dma_read_soft_reset(struct dma_info *di)
 				DMA_RESET_WAIT_US, DMA_RESET_TIMEOUT_US, 0,
 				di, PCIE_DMA_READ_ENGINE_EN);
 
-	di->rd_ch.status = DMA_CH_STOPPED;
+	di->rd_ch[0].status = DMA_CH_STOPPED;
 	/* Pull back the enable bit to 1 */
 	dw_pcie_writel_dma(di, PCIE_DMA_READ_ENGINE_EN, BIT(0));
 
@@ -264,8 +264,8 @@ void dw_pcie_dma_clear_regs(struct dma_info *di)
 	u8 ch = 0;
 	u8 dir = DMA_CH_WRITE;
 
-	di->wr_ch.status = DMA_CH_STOPPED;
-	di->rd_ch.status = DMA_CH_STOPPED;
+	di->wr_ch[0].status = DMA_CH_STOPPED;
+	di->rd_ch[0].status = DMA_CH_STOPPED;
 
 	for (dir = DMA_CH_WRITE; dir <= DMA_CH_READ; dir++) {
 		u32 ch_base = dw_pcie_get_dma_channel_base(di, ch, dir);
@@ -323,30 +323,30 @@ int dw_pcie_dma_single_rw(struct dma_info *di,
 
 	flags = dma_single_rw->flags;
 	ptr_ch = (flags & DMA_FLAG_WRITE_ELEM) ?
-		&di->wr_ch : &di->rd_ch;
+		&di->wr_ch[0] : &di->rd_ch[0];
 
 	if (flags & DMA_FLAG_WRITE_ELEM) {
-		/* Invalid channel number */
-		if (dma_single_rw->ch_num > dma_nr_ch - 1)
-			return -EINVAL;
+		/* /\* Invalid channel number *\/ */
+		/* if (dma_single_rw->ch_num > dma_nr_ch - 1) */
+		/* 	return -EINVAL; */
 
-		if (di->wr_ch.status == DMA_CH_RUNNING)
-			return -EBUSY;
+		/* if (di->wr_ch[ch_nr].status == DMA_CH_RUNNING) */
+		/* 	return -EBUSY; */
 
-		di->wr_ch.status = DMA_CH_RUNNING;
-		di->wr_ch.errors = 0;
+		/* di->wr_ch[ch_nr].status = DMA_CH_RUNNING; */
+		di->wr_ch[ch_nr].errors = 0;
 		dw_pcie_dma_write_en(di);
 		dir = DMA_CH_WRITE;
 	} else {
 		/* Invalid channel number */
-		if (dma_single_rw->ch_num > dma_nr_ch - 1)
-			return -EINVAL;
+		/* if (dma_single_rw->ch_num > dma_nr_ch - 1) */
+		/* 	return -EINVAL; */
 
-		if (di->rd_ch.status == DMA_CH_RUNNING)
-			return -EBUSY;
+		/* if (di->rd_ch[ch_nr].status == DMA_CH_RUNNING) */
+		/* 	return -EBUSY; */
 
-		di->rd_ch.status = DMA_CH_RUNNING;
-		di->rd_ch.errors = 0;
+		/* di->rd_ch[ch_nr].status = DMA_CH_RUNNING; */
+		di->rd_ch[ch_nr].errors = 0;
 		dw_pcie_dma_read_en(di);
 		dir = DMA_CH_READ;
 	}
@@ -389,9 +389,9 @@ int dw_pcie_dma_single_rw(struct dma_info *di,
 	dw_pcie_dma_set_dar(di, dma_single_rw->dar, ch_nr, dir);
 
 	if (flags & DMA_FLAG_WRITE_ELEM)
-		dw_pcie_writel_dma(di, PCIE_DMA_WRITE_DOORBELL, 0);
+		dw_pcie_writel_dma(di, PCIE_DMA_WRITE_DOORBELL, ch_nr);
 	else
-		dw_pcie_writel_dma(di, PCIE_DMA_READ_DOORBELL, 0);
+		dw_pcie_writel_dma(di, PCIE_DMA_READ_DOORBELL, ch_nr);
 
 	return 0;
 }
@@ -431,30 +431,35 @@ static void dw_pcie_dma_check_errors(struct dma_info *di,
 /* Generic int handlers for DMA read and write (separate).
  * They should be called from the platform specific interrupt handler.
  */
-u32 dw_handle_dma_irq_write(struct dma_info *di, u32 val_write)
+u32 dw_handle_dma_irq_write(struct dma_info *di, u32 val_write, struct dma_ch_info *chinfo)
 {
 	u32 err_type = DMA_ERR_NONE;
 
 	if (val_write) {
-		if (di->wr_ch.status == DMA_CH_RUNNING) {
+	    if (READ_ONCE(chinfo->status) == DMA_CH_RUNNING) {
 			if (val_write & PCIE_ABORT_INT_STATUS_MASK) {
+			    /* pr_err("IRQE %i\n", chinfo->ch_no); */
 				/* Abort interrupt */
 				/* Get error type */
 				dw_pcie_dma_check_errors(di,
 					DMA_FLAG_WRITE_ELEM,
-					&di->wr_ch.errors);
+					&chinfo->errors);
 				/* Clear interrupt */
 				dw_pcie_writel_dma(di,
 					PCIE_DMA_WRITE_INT_CLEAR,
 					PCIE_ABORT_INT_CLEAR_MASK);
-				err_type = di->wr_ch.errors;
+				err_type = chinfo->errors;
 			} else { /* Done interrupt */
+			    /* pr_err("IRQD %i (%i)\n", chinfo->ch_no, smp_processor_id()); */
 				dw_pcie_writel_dma(di,
-					PCIE_DMA_WRITE_INT_CLEAR,
-					PCIE_DONE_INT_CLEAR_MASK);
+						   PCIE_DMA_WRITE_INT_CLEAR, (1 << chinfo->ch_no));
+					/* PCIE_DONE_INT_CLEAR_MASK); */
 			}
-			di->wr_ch.status = DMA_CH_STOPPED;
+			WRITE_ONCE(chinfo->status, DMA_CH_STOPPED);
+			smp_wmb();
+			/* pr_err("%i freed (%i)\n", chinfo->ch_no, smp_processor_id()); */
 		} else {
+		    /* pr_err("IRQ ON NOT RUNNING CHANNEL %i\n", chinfo->ch_no); */
 			/* Clear all interrupts */
 			dw_pcie_writel_dma(di,
 				PCIE_DMA_WRITE_INT_CLEAR,
@@ -471,30 +476,30 @@ u32 dw_handle_dma_irq_write(struct dma_info *di, u32 val_write)
 	return err_type;
 }
 
-u32 dw_handle_dma_irq_read(struct dma_info *di, u32 val_read)
+u32 dw_handle_dma_irq_read(struct dma_info *di, u32 val_read, struct dma_ch_info *chinfo)
 {
 	u32 err_type = DMA_ERR_NONE;
 
 	if (val_read) {
-		if (di->rd_ch.status == DMA_CH_RUNNING) {
+		if (chinfo->status == DMA_CH_RUNNING) {
 			/* Search interrupt type, abort or done */
 			if (val_read & PCIE_ABORT_INT_STATUS_MASK) {
 				/* Abort interrupt */
 				/* Get error type */
 				dw_pcie_dma_check_errors(di,
 					DMA_FLAG_READ_ELEM,
-					&di->rd_ch.errors);
+					&chinfo->errors);
 				/* Clear interrupt */
 				dw_pcie_writel_dma(di,
 					PCIE_DMA_READ_INT_CLEAR,
 					PCIE_ABORT_INT_CLEAR_MASK);
-				err_type = di->rd_ch.errors;
+				err_type = chinfo->errors;
 			} else { /* Done interrupt */
 				dw_pcie_writel_dma(di,
-					PCIE_DMA_READ_INT_CLEAR,
-					PCIE_DONE_INT_CLEAR_MASK);
+						   PCIE_DMA_READ_INT_CLEAR, (1 << chinfo->ch_no));
+					/* PCIE_DONE_INT_CLEAR_MASK); */
 			}
-			di->rd_ch.status = DMA_CH_STOPPED;
+			chinfo->status = DMA_CH_STOPPED;
 		} else {
 			/* Clear all interrupts */
 			dw_pcie_writel_dma(di, PCIE_DMA_READ_INT_CLEAR,
@@ -512,6 +517,50 @@ u32 dw_handle_dma_irq_read(struct dma_info *di, u32 val_read)
 }
 
 #ifdef CONFIG_PCI_EPF_TEST
+
+static int dw_pcie_find_free_channel(struct dma_info *di, bool read)
+{
+    unsigned long flags;
+    int i;
+    int ctu;
+    
+    if (read) {
+	spin_lock_irqsave(&di->rch_lock, flags);
+	for (i = 0; i < 4; ++i) {
+	    struct dma_ch_info *chi = &di->rd_ch[di->next_free_rd_ch];
+	    smp_rmb();
+	    if (READ_ONCE(chi->status) != DMA_CH_RUNNING) {
+		WRITE_ONCE(chi->status, DMA_CH_RUNNING);
+		smp_mb();
+		ctu = di->next_free_rd_ch;
+		WRITE_ONCE(di->next_free_rd_ch, (di->next_free_rd_ch + 1) % 4);
+		spin_unlock_irqrestore(&di->rch_lock, flags);
+		return ctu;
+	    }
+	    WRITE_ONCE(di->next_free_rd_ch, (di->next_free_rd_ch + 1) % 4);
+	}
+	spin_unlock_irqrestore(&di->rch_lock, flags);
+    } else {
+	spin_lock_irqsave(&di->wch_lock, flags);
+	for (i = 0; i < 4; ++i) {
+	    struct dma_ch_info *chi = &di->wr_ch[di->next_free_wr_ch];
+	    smp_rmb();
+	    if (READ_ONCE(chi->status) != DMA_CH_RUNNING) {
+		WRITE_ONCE(chi->status, DMA_CH_RUNNING);
+		smp_mb();
+		ctu = di->next_free_wr_ch;
+		WRITE_ONCE(di->next_free_wr_ch,  (di->next_free_wr_ch + 1) % 4);
+		spin_unlock_irqrestore(&di->wch_lock, flags);
+		return ctu;
+	    }
+	    WRITE_ONCE(di->next_free_wr_ch, (di->next_free_wr_ch + 1) % 4);
+	    
+	}
+	spin_unlock_irqrestore(&di->wch_lock, flags);
+    }
+    return -EBUSY;
+}
+
 int dw_pcie_ep_start_dma(struct dw_pcie_ep *ep, bool read,
 				 dma_addr_t src, dma_addr_t dst, u32 len,
 				 struct completion *complete)
@@ -520,20 +569,36 @@ int dw_pcie_ep_start_dma(struct dw_pcie_ep *ep, bool read,
 	struct dma_info *di = dw_get_dma_info(pcie);
 
 	int ret = 0;
+	int ch_num;
+	int i;
 	struct dma_data_elem dma_single = { 0, };
 
-	if (read)
+	ch_num = dw_pcie_find_free_channel(di, read);
+	if (ch_num < 0) {
+	    pr_err("Could not find free %s channel (%i)\n", read ? "read" : "write", smp_processor_id());
+	    for (i = 0; i < 4; ++i) {
+		struct dma_ch_info *chi = &di->wr_ch[i];
+		pr_err("%i: status %i\n", i, chi->status);
+	    }
+	    return ch_num;
+	}
+
+	/* pr_err("DMA %s on %i (%i)\n", read ? "read" : "write", ch_num, smp_processor_id()); */
+	dma_single.ch_num = ch_num;
+
+	if (read) {
 		dma_single.flags = (DMA_FLAG_READ_ELEM | DMA_FLAG_EN_DONE_INT |
-				DMA_FLAG_LIE);
-	else
+				    DMA_FLAG_LIE);
+		di->read_complete[dma_single.ch_num] = complete;
+	} else {
 		dma_single.flags = (DMA_FLAG_WRITE_ELEM | DMA_FLAG_EN_DONE_INT |
-				DMA_FLAG_LIE);
+				    DMA_FLAG_LIE);
+		di->write_complete[dma_single.ch_num] = complete;
+	}
 
 	dma_single.size = len;
 	dma_single.sar = src;
 	dma_single.dar = dst;
-
-	di->complete = complete;
 
 	/* Test the DMA benchmark */
 	ret = dw_pcie_dma_single_rw(di, &dma_single);

@@ -119,6 +119,7 @@ struct dma_ch_info {
 	u32 *virt_addr;
 	u8 current_elem_idx;
 	u8 current_list_size;
+    u8 ch_no;
 };
 
 /* Single block DMA transfer struct, also used for ioctl.
@@ -141,10 +142,16 @@ struct dma_info {
 	void (*write_dma)(struct dma_info *di, void __iomem *base,
 			u32 reg, size_t size, u32 val);
 
-	struct dma_ch_info	wr_ch;
-	struct dma_ch_info	rd_ch;
+	struct dma_ch_info	wr_ch[4];
+	struct dma_ch_info	rd_ch[4];
+    spinlock_t wch_lock;
+    spinlock_t rch_lock;
+    u8 next_free_rd_ch;
+    u8 next_free_wr_ch;
+    
 #ifdef CONFIG_PCI_EPF_TEST
-	struct completion *complete;
+	struct completion *read_complete[4];
+        struct completion *write_complete[4];
 #endif
 #ifdef DMA_PTR_FUNC
 	int (*ptr_func)(u32 arg);
@@ -192,8 +199,8 @@ void dw_pcie_dma_clear_regs(struct dma_info *di);
 int dw_pcie_dma_single_rw(struct dma_info *di,
 	struct dma_data_elem *dma_single_rw);
 
-u32 dw_handle_dma_irq_write(struct dma_info *di, u32 val_write);
-u32 dw_handle_dma_irq_read(struct dma_info *di, u32 val_read);
+u32 dw_handle_dma_irq_write(struct dma_info *di, u32 val_write, struct dma_ch_info *chinfo);
+u32 dw_handle_dma_irq_read(struct dma_info *di, u32 val_read, struct dma_ch_info *chinfo);
 
 #if (defined(CONFIG_PCI_EPF_TEST))
 /**

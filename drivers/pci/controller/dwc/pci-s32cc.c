@@ -196,21 +196,29 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 	struct s32cc_pcie *s32cc_pp = arg;
 	struct dma_info *di = &s32cc_pp->dma;
 	u32 dma_error = DMA_ERR_NONE;
-
+	int i;
 	u32 val_write = dw_pcie_readl_dma(di, PCIE_DMA_WRITE_INT_STATUS);
 	u32 val_read = dw_pcie_readl_dma(di, PCIE_DMA_READ_INT_STATUS);
-
+	/* pr_err("DMAIRQ %i:%i (%i)\n", val_write, val_read, smp_processor_id()); */
 	if (val_write) {
-		bool signal = (di->wr_ch.status == DMA_CH_RUNNING);
-
-		dma_error = dw_handle_dma_irq_write(di, val_write);
-		if (dma_error != DMA_ERR_NONE)
-			dev_info(s32cc_pp->pcie.dev, "dma write error 0x%0x.\n",
-					dma_error);
+		for (i = 0; i < 4; ++i) {
+		    int bitmask = 1 << i;
+		    if (val_write & bitmask) {
+			struct dma_ch_info *wrch = &di->wr_ch[i];
+			struct completion *wcmp = di->write_complete[i];
+			wrch->ch_no = i;
+			
+			dma_error = dw_handle_dma_irq_write(di, val_write, wrch);
+			if (dma_error != DMA_ERR_NONE)
+			    dev_info(s32cc_pp->pcie.dev,
+				     "dma write error 0x%0x.\n",
+				     dma_error);
 #ifdef CONFIG_PCI_EPF_TEST
-		else if (di->complete)
-			complete(di->complete);
+			else if (wcmp)
+			    complete(wcmp);
+		    }
 #endif
+		}
 
 		/* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
 		/* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
@@ -218,18 +226,26 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 		/* 	s32cc_pp->call_back(val_write); */
 	}
 	if (val_read) {
-		bool signal = (di->rd_ch.status == DMA_CH_RUNNING);
-
-		dma_error = dw_handle_dma_irq_read(di, val_read);
-		if (dma_error != DMA_ERR_NONE)
-			dev_info(s32cc_pp->pcie.dev, "dma read error 0x%0x.\n",
-					dma_error);
+		for (i = 0; i < 4; ++i) {
+		    int bitmask = 1 << i;
+		    if (val_write & bitmask) {
+			struct dma_ch_info *rch = &di->rd_ch[i];
+			struct completion *rcmp = di->read_complete[i];
+			rch->ch_no = i;
+			
+			dma_error = dw_handle_dma_irq_read(di, val_read, rch);
+			if (dma_error != DMA_ERR_NONE)
+			    dev_info(s32cc_pp->pcie.dev,
+				     "dma read error 0x%0x.\n", dma_error);
 #ifdef CONFIG_PCI_EPF_TEST
-		else if (di->complete)
-			complete(di->complete);
+			else if (rcmp)
+			    complete(rcmp);
+
 #endif
-		/* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
-		/* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
+		    }
+		    /* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
+		    /* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
+		}
 	}
 
 	return IRQ_HANDLED;
@@ -1256,6 +1272,9 @@ static int s32cc_pcie_dt_init(struct platform_device *pdev,
 		return PTR_ERR(s32cc_pp->dma.dma_base);
 	dev_dbg(dev, "dma virt: 0x" PTR_FMT "\n", s32cc_pp->dma.dma_base);
 	s32cc_pp->dma.iatu_unroll_enabled = dw_pcie_iatu_unroll_enabled(pcie);
+	spin_lock_init(&s32cc_pp->dma.rch_lock);
+	spin_lock_init(&s32cc_pp->dma.wch_lock);
+	s32cc_pp->dma.next_free_rd_ch = s32cc_pp->dma.next_free_wr_ch = 0;
 #if defined(CONFIG_PCI_S32CC_DEBUG_WRITES)
 	s32cc_pp->dma.write_dma = s32cc_pcie_write_dma;
 #endif

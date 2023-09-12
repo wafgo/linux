@@ -31,7 +31,7 @@ static int s32cc_send_dma_errors(struct dma_info *di, void __user *argp)
 	if (!argp)
 		return -EFAULT;
 
-	dma_errors = ((di->wr_ch.errors) << 16) | di->rd_ch.errors;
+	dma_errors = ((di->wr_ch[0].errors) << 16) | di->rd_ch[0].errors;
 
 	if (copy_to_user((unsigned int *)argp, &dma_errors, sizeof(u32)))
 		return -EFAULT;
