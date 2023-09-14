@@ -72,19 +72,22 @@ struct pci_epf_blockpt_reg {
         char    dev_name[];
 } __packed;
 
-struct pci_epf_bio_descr {
-	sector_t s_sector; /* start sector of the request */
-	u64 addr; /* where the data is  */
-	u64 opf;
-	u64 tag;
-	u32 len; /* bytes to put at addr + s_offset*/
-	u32 offset; /* offset from addr */
-        u32 status;
-    	u32 flags;
-        u32 res0;
-        u32 res1;
+struct pci_epf_blockpt_descr_remote {
+    u64 s_sector; /* start sector of the request */
+    u64 addr; /* where the data is  */
+    u32 len; /* bytes to pu at addr + s_offset*/
+    struct blockpt_si {
+	u8 opf;
+	u8 status;
+	u8 flags;
+	u8 res0;
+    } si;
 };
 
+struct pci_epf_blockpt_descr {
+    struct pci_epf_blockpt_descr_remote rdata;
+    u64 tag;
+};
 
 struct pci_bio_driver_ring {
 	u16 idx;
@@ -117,7 +120,7 @@ struct pci_remote_disk_device {
     struct blk_mq_tag_set tag_set;
     struct config_group cfs_group;
     struct gendisk *gd;
-    struct pci_epf_bio_descr __iomem *descr_ring;
+    struct pci_epf_blockpt_descr __iomem *descr_ring;
     struct page *desc_page;
     sector_t capacity;
     char *r_name;
@@ -154,7 +157,7 @@ struct pci_remote_disk_request {
 	int order;
 	int num_bios;
         int descr_idx;
-        struct pci_epf_bio_descr *descr;
+        struct pci_epf_blockpt_descr *descr;
 	struct work_struct bio_work;
 	struct sg_table sg_table;
 	struct scatterlist sg[];
@@ -422,11 +425,11 @@ static int pci_rd_alloc_free_descriptor(struct pci_remote_disk_device *rdd)
 	struct device *dev = &rdd->rcom->pdev->dev;
 	spin_lock(&rdd->lock);
 	for (i = 0; i < NUM_DESRIPTORS; ++i) {
-		struct pci_epf_bio_descr __iomem *de = &rdd->descr_ring[rdd->ns_idx];
-		u32 flags = READ_ONCE(de->flags);
+		struct pci_epf_blockpt_descr __iomem *de = &rdd->descr_ring[rdd->ns_idx];
+		u32 flags = READ_ONCE(de->rdata.si.flags);
 		if (!(flags & PBI_EPF_BIO_F_USED)) {
 			dev_dbg(dev, "Found free descriptor at idx %i\n", rdd->ns_idx);
-			WRITE_ONCE(de->flags, flags | PBI_EPF_BIO_F_USED);
+			WRITE_ONCE(de->rdata.si.flags, flags | PBI_EPF_BIO_F_USED);
 			ret = rdd->ns_idx;
 			rdd->ns_idx = (rdd->ns_idx + 1) % NUM_DESRIPTORS;
 			goto unlock_return;
@@ -455,7 +458,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct pci_remote_disk_request *rb_req = blk_mq_rq_to_pdu(bd->rq);
 
 	struct device *dev = &rdd->rcom->pdev->dev;
-	struct pci_epf_bio_descr __iomem *dtu;
+	struct pci_epf_blockpt_descr __iomem *dtu;
 	struct pci_bio_driver_ring __iomem *drv_ring = pci_rd_get_driver_ring(rdd);
 	dma_addr_t dma_addr;
 	char *buf;
@@ -491,17 +494,16 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 		goto free_pages;
 	}
 	
-	dtu->addr = dma_addr;
-	dtu->len = blk_rq_bytes(bd->rq);
-	dtu->offset = 0;
-	dtu->opf = rq_data_dir(bd->rq);
-	if (dtu->opf == WRITE) {
+	dtu->rdata.addr = dma_addr;
+	dtu->rdata.len = blk_rq_bytes(bd->rq);
+	dtu->rdata.si.opf = rq_data_dir(bd->rq);
+	if (dtu->rdata.si.opf == WRITE) {
 	    rq_for_each_segment (bv, bd->rq, iter) {
 		memcpy_from_bvec(buf, &bv);
 		buf += bv.bv_len;
 	    }
 	}
-	dtu->s_sector = blk_rq_pos(bd->rq);
+	dtu->rdata.s_sector = blk_rq_pos(bd->rq);
 	dtu->tag = (u64)rb_req;
 	spin_lock(&rdd->lock);
 	writew(descr_idx, &drv_ring->ring[rdd->drv_idx]);
@@ -509,9 +511,9 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	smp_wmb();
 	writew(rdd->drv_idx, &drv_ring->idx);
 	spin_unlock(&rdd->lock);
-	dev_dbg(dev, "(DIR: %s): Adding desc %i (%i). sector: 0x%llX, len: 0x%x, offset: 0x%x\n",
+	dev_dbg(dev, "(DIR: %s): Adding desc %i (%i). sector: 0x%llX, len: 0x%x\n",
 		 (rq_data_dir(bd->rq) == WRITE) ? "WRITE" : "READ", descr_idx, rdd->drv_idx,
-		 dtu->s_sector, dtu->len, dtu->offset);
+		 dtu->rdata.s_sector, dtu->rdata.len);
 
 	blk_mq_start_request(bd->rq);
 	wake_up_process(rdd->dp_thr);
@@ -583,7 +585,7 @@ static irqreturn_t pci_rd_irqhandler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void pci_rd_clear_descriptor(struct pci_remote_disk_device *rdd, struct pci_epf_bio_descr *descr)
+static void pci_rd_clear_descriptor(struct pci_remote_disk_device *rdd, struct pci_epf_blockpt_descr *descr)
 {
     unsigned long flags;
     spin_lock_irqsave(&rdd->lock, flags);
@@ -602,16 +604,16 @@ static int pci_remote_bd_dispatch(void *cookie)
     while (!kthread_should_stop()) {
 	while (readw(&dev_ring->idx) != rdd->dev_idx) {
 	    u16 descr_idx = readw(&dev_ring->ring[rdd->dev_idx]);
-	    struct pci_epf_bio_descr *desc = &rdd->descr_ring[descr_idx];
+	    struct pci_epf_blockpt_descr *desc = &rdd->descr_ring[descr_idx];
 	    struct pci_remote_disk_request *rb_req = (struct pci_remote_disk_request *)desc->tag;
 	    struct request *rq = blk_mq_rq_from_pdu(rb_req);
 	    void *buf;
 	    int i = 0;
 
 	    BUG_ON(rb_req == NULL);
-	    BUG_ON(!(READ_ONCE(desc->flags) & PBI_EPF_BIO_F_USED));
+	    BUG_ON(!(READ_ONCE(desc->rdata.si.flags) & PBI_EPF_BIO_F_USED));
 	    
-	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->s_sector, desc->len);
+	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->rdata.s_sector, desc->rdata.len);
 	    if (rq_data_dir(rq) == READ) {
 		buf = kmap(rb_req->pg);
 		rq_for_each_segment (bv, rq, iter) {
@@ -626,9 +628,9 @@ static int pci_remote_bd_dispatch(void *cookie)
 		kunmap(rb_req->pg);
 	    }
 			
-	    dma_unmap_single(dev, desc->addr, desc->len,
+	    dma_unmap_single(dev, desc->rdata.addr, desc->rdata.len,
 			     rq_dma_dir(rq));
-	    rb_req->status = (blk_status_t) readl(&desc->status);
+	    rb_req->status = (blk_status_t) readl(&desc->rdata.si.status);
 	    pci_rd_clear_descriptor(rdd, desc);
 	    __free_pages(rb_req->pg, rb_req->order);
 	    WRITE_ONCE(rdd->dev_idx, (rdd->dev_idx + 1) % NUM_DESRIPTORS);
