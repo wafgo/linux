@@ -72,7 +72,7 @@ struct pci_epf_blockpt_reg {
         char    dev_name[];
 } __packed;
 
-struct pci_epf_blockpt_descr_remote {
+struct pci_epf_blockpt_descr {
     u64 s_sector; /* start sector of the request */
     u64 addr; /* where the data is  */
     u32 len; /* bytes to pu at addr + s_offset*/
@@ -82,11 +82,6 @@ struct pci_epf_blockpt_descr_remote {
 	u8 flags;
 	u8 res0;
     } si;
-};
-
-struct pci_epf_blockpt_descr {
-    struct pci_epf_blockpt_descr_remote rdata;
-    u64 tag;
 };
 
 struct pci_bio_driver_ring {
@@ -122,6 +117,7 @@ struct pci_remote_disk_device {
     struct gendisk *gd;
     struct pci_epf_blockpt_descr __iomem *descr_ring;
     struct page *desc_page;
+    u64 *descr_tags;
     sector_t capacity;
     char *r_name;
     char *npr_name;
@@ -296,7 +292,7 @@ static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
 	writeb(rdd->id, &base->dev_idx);
 	writel(rdd->drv_offset, &base->drv_offset);
 	writel(rdd->dev_offset, &base->dev_offset);
-	dev_info(dev, "%s: Setting queue addr. #Descriptors %i (%i)\n", rdd->npr_name, NUM_DESRIPTORS, rdd->descr_size);
+	dev_info(dev, "%s: Setting queue addr. #Descriptors %i (%i Bytes)\n", rdd->npr_name, NUM_DESRIPTORS, rdd->descr_size);
 	writeq(phys_addr, &base->queue_addr);
 	writel(rdd->descr_size, &base->queue_size);
 	writel(NUM_DESRIPTORS, &base->num_desc);
@@ -426,10 +422,10 @@ static int pci_rd_alloc_free_descriptor(struct pci_remote_disk_device *rdd)
 	spin_lock(&rdd->lock);
 	for (i = 0; i < NUM_DESRIPTORS; ++i) {
 		struct pci_epf_blockpt_descr __iomem *de = &rdd->descr_ring[rdd->ns_idx];
-		u32 flags = READ_ONCE(de->rdata.si.flags);
+		u32 flags = READ_ONCE(de->si.flags);
 		if (!(flags & PBI_EPF_BIO_F_USED)) {
 			dev_dbg(dev, "Found free descriptor at idx %i\n", rdd->ns_idx);
-			WRITE_ONCE(de->rdata.si.flags, flags | PBI_EPF_BIO_F_USED);
+			WRITE_ONCE(de->si.flags, flags | PBI_EPF_BIO_F_USED);
 			ret = rdd->ns_idx;
 			rdd->ns_idx = (rdd->ns_idx + 1) % NUM_DESRIPTORS;
 			goto unlock_return;
@@ -494,17 +490,17 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 		goto free_pages;
 	}
 	
-	dtu->rdata.addr = dma_addr;
-	dtu->rdata.len = blk_rq_bytes(bd->rq);
-	dtu->rdata.si.opf = rq_data_dir(bd->rq);
-	if (dtu->rdata.si.opf == WRITE) {
+	dtu->addr = dma_addr;
+	dtu->len = blk_rq_bytes(bd->rq);
+	dtu->si.opf = rq_data_dir(bd->rq);
+	if (dtu->si.opf == WRITE) {
 	    rq_for_each_segment (bv, bd->rq, iter) {
 		memcpy_from_bvec(buf, &bv);
 		buf += bv.bv_len;
 	    }
 	}
-	dtu->rdata.s_sector = blk_rq_pos(bd->rq);
-	dtu->tag = (u64)rb_req;
+	dtu->s_sector = blk_rq_pos(bd->rq);
+	rdd->descr_tags[descr_idx] = (u64)rb_req;
 	spin_lock(&rdd->lock);
 	writew(descr_idx, &drv_ring->ring[rdd->drv_idx]);
 	rdd->drv_idx = (rdd->drv_idx + 1) % NUM_DESRIPTORS;
@@ -513,7 +509,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	spin_unlock(&rdd->lock);
 	dev_dbg(dev, "(DIR: %s): Adding desc %i (%i). sector: 0x%llX, len: 0x%x\n",
 		 (rq_data_dir(bd->rq) == WRITE) ? "WRITE" : "READ", descr_idx, rdd->drv_idx,
-		 dtu->rdata.s_sector, dtu->rdata.len);
+		 dtu->s_sector, dtu->len);
 
 	blk_mq_start_request(bd->rq);
 	wake_up_process(rdd->dp_thr);
@@ -585,10 +581,12 @@ static irqreturn_t pci_rd_irqhandler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void pci_rd_clear_descriptor(struct pci_remote_disk_device *rdd, struct pci_epf_blockpt_descr *descr)
+static void pci_rd_clear_descriptor(struct pci_remote_disk_device *rdd, struct pci_epf_blockpt_descr *descr, u16 descr_idx)
 {
     unsigned long flags;
+    
     spin_lock_irqsave(&rdd->lock, flags);
+    rdd->descr_tags[descr_idx] = 0;
     memset(descr, 0, sizeof(*descr));
     spin_unlock_irqrestore(&rdd->lock, flags);
 }
@@ -605,15 +603,15 @@ static int pci_remote_bd_dispatch(void *cookie)
 	while (readw(&dev_ring->idx) != rdd->dev_idx) {
 	    u16 descr_idx = readw(&dev_ring->ring[rdd->dev_idx]);
 	    struct pci_epf_blockpt_descr *desc = &rdd->descr_ring[descr_idx];
-	    struct pci_remote_disk_request *rb_req = (struct pci_remote_disk_request *)desc->tag;
+	    struct pci_remote_disk_request *rb_req = (struct pci_remote_disk_request *)rdd->descr_tags[descr_idx];
 	    struct request *rq = blk_mq_rq_from_pdu(rb_req);
 	    void *buf;
 	    int i = 0;
 
 	    BUG_ON(rb_req == NULL);
-	    BUG_ON(!(READ_ONCE(desc->rdata.si.flags) & PBI_EPF_BIO_F_USED));
+	    BUG_ON(!(READ_ONCE(desc->si.flags) & PBI_EPF_BIO_F_USED));
 	    
-	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->rdata.s_sector, desc->rdata.len);
+	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->s_sector, desc->len);
 	    if (rq_data_dir(rq) == READ) {
 		buf = kmap(rb_req->pg);
 		rq_for_each_segment (bv, rq, iter) {
@@ -628,10 +626,11 @@ static int pci_remote_bd_dispatch(void *cookie)
 		kunmap(rb_req->pg);
 	    }
 			
-	    dma_unmap_single(dev, desc->rdata.addr, desc->rdata.len,
+	    dma_unmap_single(dev, desc->addr, desc->len,
 			     rq_dma_dir(rq));
-	    rb_req->status = (blk_status_t) readl(&desc->rdata.si.status);
-	    pci_rd_clear_descriptor(rdd, desc);
+	    rb_req->status = (blk_status_t) readl(&desc->si.status);
+	    
+	    pci_rd_clear_descriptor(rdd, desc, descr_idx);
 	    __free_pages(rb_req->pg, rb_req->order);
 	    WRITE_ONCE(rdd->dev_idx, (rdd->dev_idx + 1) % NUM_DESRIPTORS);
 	    blk_mq_complete_request(rq);
@@ -659,6 +658,13 @@ static int pci_remote_parse_disks(struct pci_remote_disk_common *rcom)
 	rdd = kzalloc(sizeof(*rdd), GFP_KERNEL);
 	if (!rdd) {
 	    dev_err(dev, "Could not allocate rd struct\n");
+	    err = -ENOMEM;
+	    goto err_free;
+	}
+
+	rdd->descr_tags = kzalloc((sizeof(u64) * NUM_DESRIPTORS), GFP_KERNEL);
+	if (!rdd->descr_tags) {
+	    dev_err(dev, "Could not allocate descriptor tags\n");
 	    err = -ENOMEM;
 	    goto err_free;
 	}
@@ -712,6 +718,7 @@ err_free:
 	if (rdd->l_name)
 	    kfree(rdd->l_name);
 	list_del(lh);
+	kfree(rdd->descr_tags);
 	kfree(rdd);
     }
     return err;
@@ -862,6 +869,7 @@ static void pci_remote_bd_remove(struct pci_dev *pdev)
 	configfs_unregister_group(&rdd->cfs_group);
 
 	list_del(&rdd->node);
+	kfree(rdd->descr_tags);
 	kfree(rdd);
     }
 

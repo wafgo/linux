@@ -228,7 +228,7 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 	if (val_read) {
 		for (i = 0; i < 4; ++i) {
 		    int bitmask = 1 << i;
-		    if (val_write & bitmask) {
+		    if (val_read & bitmask) {
 			struct dma_ch_info *rch = &di->rd_ch[i];
 			struct completion *rcmp = di->read_complete[i];
 			rch->ch_no = i;

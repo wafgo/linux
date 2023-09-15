@@ -307,7 +307,7 @@ int dw_pcie_dma_single_rw(struct dma_info *di,
 	struct dma_data_elem *dma_single_rw)
 {
 	u32 flags;
-	struct dma_ch_info *ptr_ch;
+	/* struct dma_ch_info *ptr_ch; */
 	u8 ch_nr = dma_single_rw->ch_num;
 	const u32 dma_nr_ch = dw_pcie_dma_get_nr_chan(di);
 	u8 dir;
@@ -322,8 +322,8 @@ int dw_pcie_dma_single_rw(struct dma_info *di,
 		return -EINVAL;
 
 	flags = dma_single_rw->flags;
-	ptr_ch = (flags & DMA_FLAG_WRITE_ELEM) ?
-		&di->wr_ch[0] : &di->rd_ch[0];
+	/* ptr_ch = (flags & DMA_FLAG_WRITE_ELEM) ? */
+	/* 	&di->wr_ch[0] : &di->rd_ch[0]; */
 
 	if (flags & DMA_FLAG_WRITE_ELEM) {
 		/* /\* Invalid channel number *\/ */
