@@ -27,6 +27,7 @@
 #include <linux/kthread.h>
 #include <linux/pci-epf-block-passthru.h>
 
+
 /* #define USE_DMAENGINE */
 
 #define DRV_RING_POLL_INTERVAL_MS (1)
@@ -75,9 +76,9 @@ struct pci_epf_blockpt_device {
 
         struct semaphore __percpu *proc_sem;
         struct semaphore __percpu *disp_sem;
-    
+
         spinlock_t dev_lock;
-        spinlock_t nm_lock; /* node move lock */
+        spinlock_t nm_lock; 
 };
 
 struct pci_blockpt_device_common {
@@ -116,6 +117,7 @@ struct pci_epf_blockpt_info {
     enum dma_data_direction dma_dir;
     int cpu;
 };
+#define blockpt_retry_delay()  usleep_range(100, 500)
 
 static int pci_blockpt_digest_descriptor(void *);
 static int pci_blockpt_bio_submit(void *);
@@ -762,7 +764,7 @@ static int pci_blockpt_dispatch_desc_on_cpu(void *__bpt_dev)
 	    list_add_tail(&bpt_dd->node, cpu_list);
 	    spin_unlock(lock);
 
-	    cpu = (cpu + 1) % num_present_cpus();
+	    cpu = (cpu + 1) % bpt_dev->max_cpu;
 	    
 	    bpt_dev->drv_idx = (bpt_dev->drv_idx + 1) % bpt_dev->num_desc;
 	    up(sem);
@@ -792,101 +794,111 @@ static int pci_blockpt_bio_submit(void *__bpt_dev)
     struct semaphore *sem = this_cpu_ptr(bpt_dev->disp_sem);
     
     while (!kthread_should_stop()) {
-	while (true) {
-	    down(sem);
-	    /* Here no lock is needed as the first element should always be there, guaranteed by the semaphore and cannot be removed underneath us*/
-	    bpt_dd = list_first_entry_or_null(cpu_list, struct pci_blockt_dispatch_descriptor, node);
+	down(sem);
+	/* Here no lock is needed as the first element should always be there, guaranteed by the semaphore and cannot be removed underneath us*/
+	bpt_dd = list_first_entry_or_null(cpu_list, struct pci_blockt_dispatch_descriptor, node);
 	    
-	    BUG_ON(bpt_dd == NULL);
+	BUG_ON(bpt_dd == NULL);
 
-	    de = bpt_dd->desc_idx;
-	    descr = &bpt_dev->descr[de];
-	    memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
+	de = bpt_dd->desc_idx;
+	descr = &bpt_dev->descr[de];
+	memcpy_fromio(&loc_descr, descr, sizeof(loc_descr));
 
-	    BUG_ON(!(loc_descr.si.flags & PBI_EPF_BLOCKPT_F_USED));
+	BUG_ON(!(loc_descr.si.flags & PBI_EPF_BLOCKPT_F_USED));
 
-	    bio_info = alloc_pci_epf_blockpt_info(bpt_dev, loc_descr.len, descr, de, (loc_descr.si.opf == WRITE) ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
-	    if (unlikely(!bio_info)) {
-		dev_err(dev, "Unable to allocate bio_info\n");
-		break;
+	bio_info = alloc_pci_epf_blockpt_info(bpt_dev, loc_descr.len, descr, de, (loc_descr.si.opf == WRITE) ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+	if (unlikely(!bio_info)) {
+	    dev_err(dev, "Unable to allocate bio_info\n");
+	    /* the descriptor was _not_ processed, we need to increment the semaphore again */
+	    up(sem);
+	    blockpt_retry_delay();
+	    continue;
+	}
+
+	bio_set_dev(bio_info->bio, bpt_dev->bd);
+	bio_info->bio->bi_iter.bi_sector = loc_descr.s_sector;
+	bio_info->bio->bi_opf = loc_descr.si.opf == WRITE ? REQ_OP_WRITE : REQ_OP_READ;
+	if (loc_descr.si.opf == WRITE) {
+	    ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, loc_descr.addr, loc_descr.len);
+	    if (ret) {
+		/* This is not neccessary an error. Some PCI Controllers have very few translation windows, and as we run this on all available cores
+		   it is not unusual that the translation windows are all used. Instead of giving up and panic here, just wait an retry. It will usually
+		   be available on the next try */
+		dev_info(dev, "Mapping descriptor failed with %i. Retry\n", ret);
+		goto err_retry;
 	    }
-
-	    bio_set_dev(bio_info->bio, bpt_dev->bd);
-	    bio_info->bio->bi_iter.bi_sector = loc_descr.s_sector;
-	    bio_info->bio->bi_opf = loc_descr.si.opf == WRITE ? REQ_OP_WRITE : REQ_OP_READ;
-	    if (loc_descr.si.opf == WRITE) {
-		ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, loc_descr.addr, loc_descr.len);
-		if (ret) {
-		    dev_err(dev, "Failed to map descriptor: %i\n", ret);
+#ifdef USE_DMAENGINE
+	    if (bpt_dev->dma_chan) {
+		dma_txd = dmaengine_prep_dma_memcpy(bpt_dev->dma_chan, page_to_phys(bio_info->page), bio_info->phys_addr, loc_descr.len, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
+		if (!dma_txd) {
+		    ret = -ENODEV;
+		    dev_err(dev, "Failed to prepare DMA memcpy\n");
 		    break;
 		}
-#ifdef USE_DMAENGINE
-		if (bpt_dev->dma_chan) {
-		    dma_txd = dmaengine_prep_dma_memcpy(bpt_dev->dma_chan, page_to_phys(bio_info->page), bio_info->phys_addr, loc_descr.len, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
-		    if (!dma_txd) {
-			ret = -ENODEV;
-			dev_err(dev, "Failed to prepare DMA memcpy\n");
-			break;
-		    }
 		    
-		    dma_txd->callback = pci_epf_blockpt_dma_callback;
-		    dma_txd->callback_param = &bio_info;
-		    dma_cookie = dma_txd->tx_submit(dma_txd);
-		    ret = dma_submit_error(dma_cookie);
-		    if (ret) {
-			dev_err(dev, "Failed to do DMA tx_submit %d\n", dma_cookie);
-			break;
-		    }
-		    
-		    dma_async_issue_pending(bpt_dev->dma_chan);
-		    ret = wait_for_completion_interruptible_timeout(&bio_info->dma_transfer_complete);
-		    if (ret <= 0) {
-			ret = -ETIMEDOUT;
-			dev_err(dev, "DMA wait_for_completion timeout\n");
-			dmaengine_terminate_sync(bpt_dev->dma_chan);
-			break;
-		    }
-		} else {
-		    memcpy_fromio(page_address(bio_info->page), bio_info->addr, loc_descr.len);
+		dma_txd->callback = pci_epf_blockpt_dma_callback;
+		dma_txd->callback_param = &bio_info;
+		dma_cookie = dma_txd->tx_submit(dma_txd);
+		ret = dma_submit_error(dma_cookie);
+		if (ret) {
+		    dev_err(dev, "Failed to do DMA tx_submit %d\n", dma_cookie);
+		    break;
 		}
+		    
+		dma_async_issue_pending(bpt_dev->dma_chan);
+		ret = wait_for_completion_interruptible_timeout(&bio_info->dma_transfer_complete);
+		if (ret <= 0) {
+		    ret = -ETIMEDOUT;
+		    dev_err(dev, "DMA wait_for_completion timeout\n");
+		    dmaengine_terminate_sync(bpt_dev->dma_chan);
+		    break;
+		}
+	    } else {
+		memcpy_fromio(page_address(bio_info->page), bio_info->addr, loc_descr.len);
+	    }
 
 #else
-		ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, bio_info->dma_addr, loc_descr.len, &bio_info->dma_transfer_complete);
-		if (ret) {
-		    dev_err(dev, "Failed to start single DMA read\n");
-		    break;
-		} else {
-		    ret = wait_for_completion_interruptible_timeout(&bio_info->dma_transfer_complete, msecs_to_jiffies(10));
-		    if (ret <= 0) {
-			ret = -ETIMEDOUT;
-			dev_err(dev, "DMA wait_for_completion timeout\n");
-			break;
-		    }
+	    ret = pci_epc_start_single_dma(epf->epc, epf->func_no, epf->vfunc_no, 1, bio_info->phys_addr, bio_info->dma_addr, loc_descr.len, &bio_info->dma_transfer_complete);
+	    if (ret) {
+		dev_err(dev, "Failed to start single DMA read\n");
+		goto err_retry;
+	    } else {
+		ret = wait_for_completion_interruptible_timeout(&bio_info->dma_transfer_complete, msecs_to_jiffies(10));
+		if (ret <= 0) {
+		    ret = -ETIMEDOUT;
+		    dev_err(dev, "DMA wait_for_completion timeout\n");
+		    goto err_retry;
 		}
-		pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no,
-				   bio_info->phys_addr);
-		pci_epc_mem_free_addr(epf->epc, bio_info->phys_addr, bio_info->addr,
-				      bio_info->size);
-#endif
 	    }
+	    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no,
+			       bio_info->phys_addr);
+	    pci_epc_mem_free_addr(epf->epc, bio_info->phys_addr, bio_info->addr,
+				  bio_info->size);
+#endif
+	}
 
-	    bio_info->cpu = smp_processor_id();
-	    bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
-	    bio_info->bio->bi_private = bio_info;
-	    bio_add_page(bio_info->bio, bio_info->page, loc_descr.len, 0);
-	    submit_bio(bio_info->bio);
+	bio_info->cpu = smp_processor_id();
+	bio_info->bio->bi_end_io = pci_epf_blockpt_transfer_complete;
+	bio_info->bio->bi_private = bio_info;
+	bio_add_page(bio_info->bio, bio_info->page, loc_descr.len, 0);
+	submit_bio(bio_info->bio);
 	    
-	    spin_lock(lock);
-	    list_del(&bpt_dd->node);
-	    spin_unlock(lock);
+	spin_lock(lock);
+	list_del(&bpt_dd->node);
+	spin_unlock(lock);
 	    
-	    devm_kfree(dev, bpt_dd);
+	devm_kfree(dev, bpt_dd);
+	continue;
+err_retry:
+	if (loc_descr.si.opf == WRITE) {
+	    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no,
+			       bio_info->phys_addr);
+	    pci_epc_mem_free_addr(epf->epc, bio_info->phys_addr, bio_info->addr,
+				  bio_info->size);
 	}
-	
-	if (ret) {
-	    free_pci_blockpt_info(bio_info);
-	    ret = 0;
-	}
+	free_pci_blockpt_info(bio_info);
+	blockpt_retry_delay();
+	up(sem);
     }
     
     return 0;
@@ -903,14 +915,13 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 	int ret;
 	struct list_head *cpu_list = this_cpu_ptr(bpt_dev->proc_list);
 	struct semaphore *sem = this_cpu_ptr(bpt_dev->proc_sem);
-	
 	__maybe_unused struct dma_async_tx_descriptor *dma_rxd;
 	__maybe_unused dma_cookie_t dma_cookie;
 	__maybe_unused char *buf;
 
 	while (!kthread_should_stop()) {
 	    down(sem);
-	    /* the semaphore gets sure that the first element is always there, so no lock needed here */
+	    /* the semaphore gets assures the first element is always there, so no lock needed here */
 	    bi = list_first_entry_or_null(cpu_list, struct pci_epf_blockpt_info, node);
 	    
 	    BUG_ON(bi == NULL);
@@ -919,12 +930,13 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 	    BUG_ON(!(loc_descr.si.flags & PBI_EPF_BLOCKPT_F_USED));
 	    if (loc_descr.si.opf == READ) {
 		ret = pci_epc_map_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr, loc_descr.addr, loc_descr.len);
-
 		if (ret) {
-		    dev_err(dev, "Failed to map buffer address\n");
+		    /* don't panic. simply retry. A window will be available sooner or later */
+		    dev_info(dev, "Could not map read descriptor. Retry\n");
+		    up(sem);
+		    blockpt_retry_delay();
 		    continue;
 		}
-
 #ifdef USE_DMAENGINE
 		if (bpt_dev->dma_chan) {
 		    dma_rxd = dmaengine_prep_dma_memcpy(bpt_dev->dma_chan, bi->phys_addr, bi->dma_addr, loc_descr.len, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
@@ -965,22 +977,27 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 		    ret = wait_for_completion_interruptible_timeout(&bi->dma_transfer_complete, msecs_to_jiffies(10));
 		    if (ret <= 0) {
 			dev_err(dev, "DMA wait_for_completion timeout\n");
-			continue;
+			goto err_retry;
 		    } 
 		} else {
 		    dev_err(dev, "Failed to start single DMA read: %i\n", ret);
-		    pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no, bi->phys_addr);
-		    continue;
+		    goto err_retry;
 		}
 #endif		
 	    }
-	    /* pci_blockpt_print_rate(dev, "READ", loc_descr.len, &start, &end); */
+	    
 	    spin_lock(&bi->bpt_dev->dev_lock);
 	    writew(bi->descr_idx, &bi->bpt_dev->device_ring->ring[bi->bpt_dev->dev_idx]);
 	    bi->bpt_dev->dev_idx = (bi->bpt_dev->dev_idx + 1) % bi->bpt_dev->num_desc;
 	    writew(bi->bpt_dev->dev_idx, &bi->bpt_dev->device_ring->idx);
 	    spin_unlock(&bi->bpt_dev->dev_lock);
 	    free_pci_blockpt_info(bi);
+	    continue;
+err_retry:
+	    pci_epc_unmap_addr(epf->epc, epf->func_no,
+			   epf->vfunc_no, bi->phys_addr);
+	    blockpt_retry_delay();
+	    up(sem);
 	}
 
 	return 0;
