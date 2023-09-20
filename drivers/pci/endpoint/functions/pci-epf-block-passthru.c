@@ -6,6 +6,35 @@
  * Author: Wadim Mueller <wadim.mueller@continental.com>
  */
 
+/*
+ * PCI Block Device Passthrough allows one Linux Device to expose its Block devices to the PCI(e) host.
+ * The device can export either the full disk or just certain partitions. Also an export in readonly mode is possible.
+ * The PCI Block Passthrough function driver is the part running on SoC2 from the diagram below. For more details refer
+ * to Documentation/PCI/endpoint/pci-endpoint-block-passthru-function.rst
+ *
+ *                                                   +-------------+  
+ *                                                   |             |
+ *                                                   |   SD Card   |  
+ *                                                   |             |  
+ *                                                   +------^------+  
+ *                                                          |                                                            
+ *		                                            |
+ *    +---------------------+                +--------------v------------+       +---------+
+ *    |                     |                |                           |       |         |
+ *    |      SoC1 (RC)      |<-------------->|        SoC2 (EP)          |<----->|  eMMC   |
+ *    |  (pci-remote-disk)  |                | (pci-epf-block-passthru)  |       |         |
+ *    |                     |                |                           |       +---------+
+ *    +---------------------+                +--------------^------------+       
+ *                                                          |
+ *                                                          |
+ *                                                   +------v------+  
+ *                                                   |             |
+ *                                                   |    NVMe     |  
+ *                                                   |             |  
+ *                                                   +-------------+
+ *
+ */
+
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
 #include <linux/io.h>
@@ -611,7 +640,7 @@ static int pci_epf_blockpt_notifier(struct notifier_block *nb, unsigned long val
 		break;
 
 	default:
-		dev_err(&epf->dev, "Invalid EPF test notifier event\n");
+		dev_err(&epf->dev, "Invalid EPF blockpt notifier event\n");
 		return NOTIFY_BAD;
 	}
 
@@ -821,9 +850,9 @@ static int pci_blockpt_bio_submit(void *__bpt_dev)
 	if (loc_descr.si.opf == WRITE) {
 	    ret = pci_epc_map_addr(epc, epf->func_no, epf->vfunc_no, bio_info->phys_addr, loc_descr.addr, loc_descr.len);
 	    if (ret) {
-		/* This is not neccessary an error. Some PCI Controllers have very few translation windows, and as we run this on all available cores
-		   it is not unusual that the translation windows are all used. Instead of giving up and panic here, just wait an retry. It will usually
-		   be available on the next try */
+		/* This is not an error. Some PCI Controllers have very few translation windows, and as we run this on all available cores
+		   it is not unusual that the translation windows are all used for a short period of time. Instead of giving up and panic here, just wait an retry. It will usually
+		   be available on the next few retries */
 		dev_info(dev, "Mapping descriptor failed with %i. Retry\n", ret);
 		goto err_retry;
 	    }
@@ -921,7 +950,7 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 
 	while (!kthread_should_stop()) {
 	    down(sem);
-	    /* the semaphore gets assures the first element is always there, so no lock needed here */
+	    /* the semaphore assures that the first element is always there, so no lock needed here */
 	    bi = list_first_entry_or_null(cpu_list, struct pci_epf_blockpt_info, node);
 	    
 	    BUG_ON(bi == NULL);
@@ -1021,14 +1050,32 @@ static int pci_epf_blockpt_probe(struct pci_epf *epf)
 	return 0;
 }
 
-static void free_per_cpu_data(struct pci_epf_blockpt_device *bpt_dev)
+static void blockpt_free_per_cpu_data(struct pci_epf_blockpt_device *bpt_dev)
 {
-    	free_percpu(bpt_dev->proc_list);
+    if (bpt_dev->proc_list) {
+	free_percpu(bpt_dev->proc_list);
+	bpt_dev->proc_list = NULL;
+    }
+    if (bpt_dev->disp_list) {
 	free_percpu(bpt_dev->disp_list);
+	bpt_dev->disp_list = NULL;
+    }
+    if (bpt_dev->proc_lock) {
 	free_percpu(bpt_dev->proc_lock);
+	bpt_dev->proc_lock = NULL;
+    }
+    if (bpt_dev->disp_lock) {
 	free_percpu(bpt_dev->disp_lock);
+	bpt_dev->disp_lock = NULL;
+    }
+    if (bpt_dev->proc_sem) {
 	free_percpu(bpt_dev->proc_sem);
+	bpt_dev->proc_sem = NULL;
+    }
+    if (bpt_dev->disp_sem) {
 	free_percpu(bpt_dev->disp_sem);
+	bpt_dev->disp_sem = NULL;
+    }
 }
 
 static void pci_epf_blockpt_remove(struct pci_epf *epf)
@@ -1056,7 +1103,7 @@ static void pci_epf_blockpt_remove(struct pci_epf *epf)
 	    }
 	}
 
-	free_per_cpu_data(bpt_dev);
+	blockpt_free_per_cpu_data(bpt_dev);
 	kfree(bpt_dev->cfs_disk_name);
 	kfree(bpt_dev->device_path);
 	devm_kfree(dev, bpt_dev);
@@ -1197,12 +1244,86 @@ static const struct config_item_type blockpt_disk_type = {
 	.ct_owner	= THIS_MODULE,
 };
 
+
+static int blockpt_alloc_per_cpu_data(struct pci_epf_blockpt_device *bpt_dev)
+{
+
+    struct device *dev = &bpt_dev->dcommon->epf->dev;
+    int cpu;
+    
+    bpt_dev->proc_lock = alloc_percpu(spinlock_t);
+    if (bpt_dev->proc_lock == NULL) {
+	dev_err(dev, "Could not alloc percpu spinlock\n");
+	goto err_dealloc;
+    }
+    
+    for_each_possible_cpu (cpu) {
+	spin_lock_init(per_cpu_ptr(bpt_dev->proc_lock, cpu));
+    }
+
+    bpt_dev->disp_lock = alloc_percpu(spinlock_t);
+    if (bpt_dev->disp_lock == NULL) {
+	dev_err(dev, "Could not alloc percpu spinlock\n");
+	goto err_dealloc;
+    }
+
+    for_each_possible_cpu (cpu) {
+	spin_lock_init(per_cpu_ptr(bpt_dev->disp_lock, cpu));
+    }
+
+    bpt_dev->proc_sem = alloc_percpu(struct semaphore);
+    if (bpt_dev->proc_sem == NULL) {
+	dev_err(dev, "Could not alloc percpu semaphore\n");
+	goto err_dealloc;
+    }
+
+    for_each_possible_cpu (cpu) {
+	sema_init(per_cpu_ptr(bpt_dev->proc_sem, cpu), 0);
+    }
+
+    bpt_dev->disp_sem = alloc_percpu(struct semaphore);
+    if (bpt_dev->disp_sem == NULL) {
+	dev_err(dev, "Could not alloc percpu semaphore\n");
+	goto err_dealloc;
+    }
+
+    for_each_possible_cpu (cpu) {
+	sema_init(per_cpu_ptr(bpt_dev->disp_sem, cpu), 0);
+    }
+
+    bpt_dev->proc_list = alloc_percpu(struct list_head);
+    if (bpt_dev->proc_list == NULL) {
+	dev_err(dev, "Could not alloc percpu list\n");
+	goto err_dealloc;
+    }
+
+    for_each_possible_cpu (cpu) {
+	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->proc_list, cpu));
+    }
+
+    bpt_dev->disp_list = alloc_percpu(struct list_head);
+    if (bpt_dev->disp_list == NULL) {
+	dev_err(dev, "Could not alloc percpu list\n");
+	goto err_dealloc;
+    }
+
+    for_each_possible_cpu (cpu) {
+	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->disp_list, cpu));
+    }
+
+    return 0;
+    
+err_dealloc:
+    blockpt_free_per_cpu_data(bpt_dev);
+    return -ENOMEM;
+}
+
 static struct config_group *pci_epf_blockpt_add_cfs(struct pci_epf *epf, struct config_group *group)
 {
     struct pci_epf_blockpt_device *bpt_dev;
     struct pci_blockpt_device_common *dcommon = epf_get_drvdata(epf);
     struct device *dev = &epf->dev;
-    int cpu;
+    int ret;
     
     bpt_dev = devm_kzalloc(dev, sizeof(*bpt_dev), GFP_KERNEL);
     if (!bpt_dev) {
@@ -1218,106 +1339,17 @@ static struct config_group *pci_epf_blockpt_add_cfs(struct pci_epf *epf, struct 
     }
     
     bpt_dev->dcommon = dcommon;
+    ret = blockpt_alloc_per_cpu_data(bpt_dev);
+    if (ret)
+	goto free_bpt_dev;
     
-    bpt_dev->proc_lock = alloc_percpu(spinlock_t);
-    if (bpt_dev->proc_lock == NULL) {
-	dev_err(dev, "Could not alloc percpu spinlock\n");
-	goto percpu_dealloc;
-    }
-    
-    for_each_possible_cpu (cpu) {
-	spin_lock_init(per_cpu_ptr(bpt_dev->proc_lock, cpu));
-    }
-
-    bpt_dev->disp_lock = alloc_percpu(spinlock_t);
-    if (bpt_dev->disp_lock == NULL) {
-	dev_err(dev, "Could not alloc percpu spinlock\n");
-	goto percpu_dealloc;
-    }
-
-    for_each_possible_cpu (cpu) {
-	spin_lock_init(per_cpu_ptr(bpt_dev->disp_lock, cpu));
-    }
-
-    bpt_dev->proc_sem = alloc_percpu(struct semaphore);
-    if (bpt_dev->proc_sem == NULL) {
-	dev_err(dev, "Could not alloc percpu semaphore\n");
-	goto percpu_dealloc;
-    }
-
-    for_each_possible_cpu (cpu) {
-	sema_init(per_cpu_ptr(bpt_dev->proc_sem, cpu), 0);
-    }
-
-    bpt_dev->disp_sem = alloc_percpu(struct semaphore);
-    if (bpt_dev->disp_sem == NULL) {
-	dev_err(dev, "Could not alloc percpu semaphore\n");
-	goto percpu_dealloc;
-    }
-
-    for_each_possible_cpu (cpu) {
-	sema_init(per_cpu_ptr(bpt_dev->disp_sem, cpu), 0);
-    }
-
-    bpt_dev->proc_list = alloc_percpu(struct list_head);
-    if (bpt_dev->proc_list == NULL) {
-	dev_err(dev, "Could not alloc percpu list\n");
-	goto percpu_dealloc;
-    }
-
-    for_each_possible_cpu (cpu) {
-	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->proc_list, cpu));
-    }
-
-    bpt_dev->disp_list = alloc_percpu(struct list_head);
-    if (bpt_dev->disp_list == NULL) {
-	dev_err(dev, "Could not alloc percpu list\n");
-	goto percpu_dealloc;
-    }
-
-    for_each_possible_cpu (cpu) {
-	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->disp_list, cpu));
-    }
-
     spin_lock_init(&bpt_dev->dev_lock);
     spin_lock_init(&bpt_dev->nm_lock);
     INIT_LIST_HEAD(&bpt_dev->node);
     config_group_init_type_name(&bpt_dev->cfg_grp, bpt_dev->cfs_disk_name, &blockpt_disk_type);
     bpt_dev->dev_tag = dcommon->next_disc_idx++;
-    
     return &bpt_dev->cfg_grp;
     
-percpu_dealloc:
-    if(bpt_dev->proc_lock != NULL) {
-	free_percpu(bpt_dev->proc_lock);
-	bpt_dev->proc_lock = NULL;
-    }
-    
-    if(bpt_dev->disp_lock != NULL) {
-	free_percpu(bpt_dev->disp_lock);
-	bpt_dev->disp_lock = NULL;
-    }
-    
-    if (bpt_dev->proc_sem != NULL) {
-	free_percpu(bpt_dev->proc_sem);
-	bpt_dev->proc_sem = NULL;
-    }
-    
-    if(bpt_dev->disp_sem != NULL) {
-	free_percpu(bpt_dev->disp_sem);
-	bpt_dev->disp_sem = NULL;
-    }
-    
-    if(bpt_dev->proc_list != NULL) {
-	free_percpu(bpt_dev->proc_list);
-	bpt_dev->proc_list = NULL;
-    }
-    
-    if (bpt_dev->disp_list != NULL) {
-	free_percpu(bpt_dev->disp_list);
-	bpt_dev->disp_list = NULL;
-    }
-
 free_bpt_dev:
     devm_kfree(dev, bpt_dev);
     return NULL;
@@ -1345,14 +1377,14 @@ static int __init pci_epf_blockpt_init(void)
 	kpciblockpt_wq = alloc_workqueue("kpciblockpt_wq",
 					     WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
 	if (!kpciblockpt_wq) {
-		pr_err("Failed to allocate the kpcitest work queue\n");
+		pr_err("Failed to allocate the kpciblockpt work queue\n");
 		return -ENOMEM;
 	}
 
 	ret = pci_epf_register_driver(&blockpt_driver);
 	if (ret) {
 		destroy_workqueue(kpciblockpt_wq);
-		pr_err("Failed to register pci epf test driver\n");
+		pr_err("Failed to register pci epf blockpt driver\n");
 		return ret;
 	}
 

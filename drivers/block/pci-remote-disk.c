@@ -3,7 +3,7 @@
  * PCI Remote Block Device Driver
  *
  * Copyright (C) 2023 Continental Automotive GmbH
- * Wadim Mueller <wadim.mueller@continental-corporation.com>
+ * Wadim Mueller <wadim.mueller@continental.com>
  */
 
 #include <linux/major.h>
@@ -31,72 +31,16 @@
 #include <linux/hdreg.h>
 #include <linux/kthread.h>
 #include <linux/configfs.h>
+#include <linux/pci-epf-block-passthru.h>
 
-#define RBD_MAGIC 0x636f6e74
-#define NUM_DESRIPTORS 1024
+#define RBD_MAGIC                               0x636f6e74
+#define NUM_DESRIPTORS                          1024
 
 #define RBD_STATUS_SUCCESS	                BIT(0)
 #define RD_STATUS_TIMEOUT_COUNT                 (100)
 
-#define COMMAND_RAISE_LEGACY_IRQ	BIT(0)
-#define COMMAND_RAISE_MSI_IRQ		BIT(1)
-#define COMMAND_RAISE_MSIX_IRQ		BIT(2)
-#define COMMAND_WRITE_TO_QUEUE          BIT(4)
-#define COMMAND_READ_FROM_QUEUE         BIT(5)
-#define COMMAND_SET_QUEUE               BIT(6)
-#define COMMAND_GET_DEVICES             BIT(7)
-#define COMMAND_START                   BIT(8)
-#define COMMAND_GET_NUM_SECTORS         BIT(9)
-
-#define PBI_EPF_BIO_F_LAST BIT(0)
-#define PBI_EPF_BIO_F_USED BIT(1)
-
-#define PBI_EPF_BIO_F_DIR_READ BIT(2)
-
-struct pci_epf_blockpt_reg {
-	u32	magic;
-	u32	command;
-	u32	status;
-        u32     queue_size;  /* number of struct pci_epf_blockpt_descr */
-        u32     drv_offset;
-        u32     dev_offset;
-	u32	flags;
-        u32	num_desc;
-        u32     max_devs;
-        u8      dev_idx;
-        u8      res0;
-        u8      res1;
-        u8      res2;
-        u64	queue_addr;  /* start of struct pci_epf_blockpt_descr*/
-        u64     num_sectors;
-        char    dev_name[];
-} __packed;
-
-struct pci_epf_blockpt_descr {
-    u64 s_sector; /* start sector of the request */
-    u64 addr; /* where the data is  */
-    u32 len; /* bytes to pu at addr + s_offset*/
-    struct blockpt_si {
-	u8 opf;
-	u8 status;
-	u8 flags;
-	u8 res0;
-    } si;
-};
-
-struct pci_bio_driver_ring {
-	u16 idx;
-	u16 ring[]; /* queue size*/
-};
-
-struct pci_bio_device_ring {
-	u16 idx;
-	u16 ring[]; /* queue size*/
-};
-
-
-#define DRV_MODULE_NAME "pci-remote-disk"
-#define PCI_RBD_INLINE_SG_CNT 2
+#define DRV_MODULE_NAME                         "pci-remote-disk"
+#define PCI_RBD_INLINE_SG_CNT                   2
 
 enum pci_barno {
 	BAR_0,
@@ -263,7 +207,7 @@ static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
 	return ret;
 
     if (!rdd->attached && attach) {
-	rdd->descr_size = ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64)) + ALIGN(sizeof(struct pci_bio_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64)) + ALIGN(sizeof(struct pci_bio_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64));
+	rdd->descr_size = ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64));
 
 	rdd->dp_order = get_order(rdd->descr_size);
 	/* we need page aligned memory for the descriptors, use alloc_pages() to not waste any memory */
@@ -286,7 +230,7 @@ static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
 	rdd->drv_offset =
 		ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64));
 	rdd->dev_offset =
-		rdd->drv_offset + ALIGN(sizeof(struct pci_bio_driver_ring) +
+		rdd->drv_offset + ALIGN(sizeof(struct pci_blockpt_driver_ring) +
 						 (NUM_DESRIPTORS * sizeof(u16)),
 					 sizeof(u64));
 	writeb(rdd->id, &base->dev_idx);
@@ -404,14 +348,14 @@ static const struct pci_device_id pci_remote_bd_tbl[] = {
 	{ 0 }
 };
 
-static struct pci_bio_driver_ring * pci_rd_get_driver_ring(struct pci_remote_disk_device *rdd)
+static struct pci_blockpt_driver_ring * pci_rd_get_driver_ring(struct pci_remote_disk_device *rdd)
 {
-	return (struct pci_bio_driver_ring *)((u64)rdd->descr_ring + rdd->drv_offset);
+	return (struct pci_blockpt_driver_ring *)((u64)rdd->descr_ring + rdd->drv_offset);
 }
 
-static struct pci_bio_device_ring * pci_rd_get_device_ring(struct pci_remote_disk_device *rdd)
+static struct pci_blockpt_device_ring * pci_rd_get_device_ring(struct pci_remote_disk_device *rdd)
 {
-	return (struct pci_bio_device_ring *)((u64)rdd->descr_ring + rdd->dev_offset);
+	return (struct pci_blockpt_device_ring *)((u64)rdd->descr_ring + rdd->dev_offset);
 }
 
 static int pci_rd_alloc_free_descriptor(struct pci_remote_disk_device *rdd)
@@ -423,9 +367,9 @@ static int pci_rd_alloc_free_descriptor(struct pci_remote_disk_device *rdd)
 	for (i = 0; i < NUM_DESRIPTORS; ++i) {
 		struct pci_epf_blockpt_descr __iomem *de = &rdd->descr_ring[rdd->ns_idx];
 		u32 flags = READ_ONCE(de->si.flags);
-		if (!(flags & PBI_EPF_BIO_F_USED)) {
+		if (!(flags & PBI_EPF_BLOCKPT_F_USED)) {
 			dev_dbg(dev, "Found free descriptor at idx %i\n", rdd->ns_idx);
-			WRITE_ONCE(de->si.flags, flags | PBI_EPF_BIO_F_USED);
+			WRITE_ONCE(de->si.flags, flags | PBI_EPF_BLOCKPT_F_USED);
 			ret = rdd->ns_idx;
 			rdd->ns_idx = (rdd->ns_idx + 1) % NUM_DESRIPTORS;
 			goto unlock_return;
@@ -455,7 +399,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	struct device *dev = &rdd->rcom->pdev->dev;
 	struct pci_epf_blockpt_descr __iomem *dtu;
-	struct pci_bio_driver_ring __iomem *drv_ring = pci_rd_get_driver_ring(rdd);
+	struct pci_blockpt_driver_ring __iomem *drv_ring = pci_rd_get_driver_ring(rdd);
 	dma_addr_t dma_addr;
 	char *buf;
 	int err;
@@ -595,7 +539,7 @@ static int pci_remote_bd_dispatch(void *cookie)
 {
     struct pci_remote_disk_device *rdd = cookie;
     struct device *dev = &rdd->rcom->pdev->dev;
-    struct pci_bio_device_ring *dev_ring = pci_rd_get_device_ring(rdd);
+    struct pci_blockpt_device_ring *dev_ring = pci_rd_get_device_ring(rdd);
     struct req_iterator iter;
     struct bio_vec bv;
 
@@ -609,7 +553,7 @@ static int pci_remote_bd_dispatch(void *cookie)
 	    int i = 0;
 
 	    BUG_ON(rb_req == NULL);
-	    BUG_ON(!(READ_ONCE(desc->si.flags) & PBI_EPF_BIO_F_USED));
+	    BUG_ON(!(READ_ONCE(desc->si.flags) & PBI_EPF_BLOCKPT_F_USED));
 	    
 	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n", desc->s_sector, desc->len);
 	    if (rq_data_dir(rq) == READ) {
