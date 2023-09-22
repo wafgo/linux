@@ -99,9 +99,11 @@ Bit 8           **START**: After configuring the corresponding device, this comm
 		side
 Bit 9		**NUM_SECTORS**: Get number of sectors. The host issues this command to get the
                 size of the block device in number of 512 Byte sectors
-
 Bit 10          **STOP**: Send to detach from the block device. On reception all
                 worker threads are terminated.
+		
+Bit 11          **SET_IRQ**: Sets the IRQ line for the device when the EP want to issue an MSIX IRQ
+Bit 12          **GET_PERMISSION**: Gets the permission for the device, whether Readonly or Read-Write		
 ========	================================================================
 
   
@@ -164,6 +166,10 @@ This Register contains the Queue Address of the Queue as shown in `descriptor qu
 The device puts the number of 512 Byte sectors of the device selected with blockpt_selector_idx_ if the command NUM_SECTORS from
 `command bitfield description`_ is send from the host.
 
+* **PCI_BLOCKPT_PERMISSION**
+
+This Register contains the Permission of this device. If the device can only be used in Read-Only mode the first bit is set, otherwise Read-Write mode is possible
+  
 * **PCI_BLOCKPT_DEV_NAME**
   
 The device puts the names of all devices it wants to export into this register when it receives the GET_DEVICES command from `command bitfield description`_.

@@ -31,25 +31,15 @@
 #include <linux/hdreg.h>
 #include <linux/kthread.h>
 #include <linux/configfs.h>
+#include <linux/pci-epf.h>
 #include <linux/pci-epf-block-passthru.h>
 
-#define RBD_MAGIC                               0x636f6e74
 #define NUM_DESRIPTORS                          1024
 
-#define RBD_STATUS_SUCCESS	                BIT(0)
 #define RD_STATUS_TIMEOUT_COUNT                 (100)
 
 #define DRV_MODULE_NAME                         "pci-remote-disk"
 #define PCI_RBD_INLINE_SG_CNT                   2
-
-enum pci_barno {
-	BAR_0,
-	BAR_1,
-	BAR_2,
-	BAR_3,
-	BAR_4,
-	BAR_5,
-};
 
 struct pci_remote_disk_common;
 
@@ -60,6 +50,8 @@ struct pci_remote_disk_device {
     struct config_group cfs_group;
     struct gendisk *gd;
     struct pci_epf_blockpt_descr __iomem *descr_ring;
+    struct pci_blockpt_driver_ring __iomem *drv_ring;
+    struct pci_blockpt_device_ring __iomem *dev_ring;
     struct page *desc_page;
     u64 *descr_tags;
     sector_t capacity;
@@ -72,9 +64,11 @@ struct pci_remote_disk_device {
     u32 dev_offset;
     u32 drv_idx;
     u32 dev_idx;
+    int irq;
     u8 id;
     u16 ns_idx;
     bool attached;
+    bool read_only;
     spinlock_t lock;
     struct task_struct *dp_thr;
     const struct blk_mq_queue_data *bd;
@@ -105,15 +99,15 @@ struct pci_remote_disk_request {
 
 static LIST_HEAD(available_remote_disks);
 
+static irqreturn_t pci_rd_irqhandler(int irq, void *dev_id);
 static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				    const struct blk_mq_queue_data *bd);
 static void pci_rd_end_rq(struct request *rq);
 static enum blk_eh_timer_return pci_rd_timeout_rq(struct request *rq, bool res);
 
 static const struct blk_mq_ops pci_rd_mq_ops = { .queue_rq = pci_rd_queue_rq,
-						  .complete = pci_rd_end_rq,
-						  .timeout =
-							  pci_rd_timeout_rq };
+						 .complete = pci_rd_end_rq,
+						 .timeout = pci_rd_timeout_rq };
 
 static int pci_rd_open(struct block_device *bdev, fmode_t mode);
 static void pci_rd_release(struct gendisk *disk, fmode_t mode);
@@ -123,7 +117,7 @@ static int pci_rd_ioctl(struct block_device *bdev, fmode_t mode,
 static int pci_rd_compat_ioctl(struct block_device *bdev, fmode_t mode,
 			       unsigned int cmd, unsigned long arg);
 
-static int pci_remote_bd_dispatch(void *cookie);
+static int pci_remote_disk_dispatch(void *cookie);
 
 static const struct block_device_operations pci_rd_ops = {
 	.open = pci_rd_open,
@@ -136,16 +130,17 @@ static const struct block_device_operations pci_rd_ops = {
 #endif
 };
 
-static int pci_remote_bd_send_command(struct pci_remote_disk_common *rcom, u32 cmd)
+static int pci_remote_disk_send_command(struct pci_remote_disk_common *rcom, u32 cmd)
 {
     int timeout = 0;
     
+    smp_wmb();
     writel(cmd, &rcom->base->command);
-    while(++timeout < RD_STATUS_TIMEOUT_COUNT && readl(&rcom->base->status) != RBD_STATUS_SUCCESS)   {
+    while(++timeout < RD_STATUS_TIMEOUT_COUNT && readl(&rcom->base->status) != BPT_STATUS_SUCCESS)   {
 	usleep_range(100, 200);
     }
 
-    if (readl(&rcom->base->status) != RBD_STATUS_SUCCESS) {
+    if (readl(&rcom->base->status) != BPT_STATUS_SUCCESS) {
 	return -ENODEV;
     }
 	
@@ -193,121 +188,200 @@ static ssize_t pci_remote_disk_group_attach_show(struct config_item *item,
     return sprintf(page, "%s\n", rdd->attached ? "yes" : "no");
 }
 
+static int pci_remote_disk_attach_device(struct pci_remote_disk_device *rdd)
+{
+    dma_addr_t phys_addr;
+    int ret;
+    char irq_name[64];
+    struct device *dev = &rdd->rcom->pdev->dev;
+    struct pci_epf_blockpt_reg __iomem *base = rdd->rcom->base;
+    
+    rdd->descr_size = ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64));
+
+    rdd->dp_order = get_order(rdd->descr_size);
+    /* we need page aligned memory for the descriptors, use alloc_pages() to not waste any memory */
+    rdd->desc_page = alloc_pages(GFP_KERNEL | GFP_DMA, rdd->dp_order);
+    if (!rdd->desc_page) {
+	dev_err(dev, "could not alloc memory\n", rdd->descr_size);
+	ret = -ENOSPC;
+	goto out_err;
+    }
+
+    rdd->descr_ring = kmap(rdd->desc_page);
+    memset(rdd->descr_ring, 0, rdd->descr_size);
+    rdd->dev_idx = rdd->drv_idx = rdd->ns_idx = 0;
+
+    phys_addr = dma_map_single(dev, rdd->descr_ring,
+			       rdd->descr_size, DMA_BIDIRECTIONAL);
+    if (dma_mapping_error(dev, phys_addr)) {
+	dev_err(dev, "failed to map descriptor address\n");
+	ret = -ENODEV;
+	goto err_desc_unmap;
+    }
+
+    rdd->drv_offset =
+	ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64));
+    rdd->dev_offset =
+	rdd->drv_offset + ALIGN(sizeof(struct pci_blockpt_driver_ring) +
+				(NUM_DESRIPTORS * sizeof(u16)),
+				sizeof(u64));
+    rdd->drv_ring = (struct pci_blockpt_driver_ring *)((u64)rdd->descr_ring + rdd->drv_offset);
+    rdd->dev_ring = (struct pci_blockpt_device_ring *)((u64)rdd->descr_ring + rdd->dev_offset);
+
+    writeb(rdd->id, &base->dev_idx);
+    writel(rdd->drv_offset, &base->drv_offset);
+    writel(rdd->dev_offset, &base->dev_offset);
+    dev_info(dev, "%s: Setting queue addr. #Descriptors %i (%i Bytes)\n", rdd->npr_name, NUM_DESRIPTORS, rdd->descr_size);
+    writeq(phys_addr, &base->queue_addr);
+    writel(rdd->descr_size, &base->queue_size);
+    writel(NUM_DESRIPTORS, &base->num_desc);
+    snprintf(irq_name, sizeof(irq_name), "rd-irq-%s", rdd->l_name);
+    rdd->irq = pci_irq_vector(rdd->rcom->pdev, rdd->id);
+    ret = devm_request_irq(dev, rdd->irq,
+			   pci_rd_irqhandler, IRQF_SHARED, irq_name, rdd);
+
+    if (ret) {
+	dev_err(dev, "Can't register %s IRQ.\n", irq_name);
+	goto err_desc_unmap;
+    }
+
+    writel(rdd->irq, &base->irq);
+    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_SET_QUEUE);
+    if (ret) {
+	dev_err(dev, "%s: cannot set queue\n", rdd->npr_name);
+	goto err_free_irq;
+    }
+
+    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_SET_IRQ);
+    if (ret) {
+	dev_err(dev, "%s: cannot set irq\n", rdd->npr_name);
+	goto err_free_irq;
+    }
+
+    
+    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_GET_NUM_SECTORS);
+    if (ret) {
+	dev_err(dev, "%s: cannot get number of sectors\n", rdd->npr_name);
+	goto err_free_irq;
+    }
+
+    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_GET_PERMISSION);
+    if (ret) {
+	dev_err(dev, "%s: cannot get permission, assume RO\n", rdd->npr_name);
+	rdd->read_only = true;
+    } else {
+	rdd->read_only = readb(&base->perm) & BPT_PERMISSION_RO;
+    }
+    
+    rdd->capacity = readq(&base->num_sectors);
+    dev_info(dev, "%s capacity 0x%lx\n", rdd->r_name, rdd->capacity);
+    
+    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_START);
+    if (ret) {
+	dev_err(dev, "%s: cannot start device\n", rdd->npr_name);
+	goto err_free_irq;
+    }
+
+    rdd->tag_set.ops = &pci_rd_mq_ops;
+    rdd->tag_set.queue_depth = 32;
+    rdd->tag_set.numa_node = NUMA_NO_NODE;
+    rdd->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
+    rdd->tag_set.nr_hw_queues = num_present_cpus();
+    rdd->tag_set.cmd_size =
+	sizeof(struct pci_remote_disk_request) +
+	sizeof(struct scatterlist) * PCI_RBD_INLINE_SG_CNT;
+    rdd->tag_set.driver_data = rdd;
+    ret = blk_mq_alloc_tag_set(&rdd->tag_set);
+    if (ret) {
+	dev_err(dev, "%s: Could not allocate tag set\n", rdd->npr_name);
+	goto err_free_irq;
+    }
+
+    rdd->gd = blk_mq_alloc_disk(&rdd->tag_set, rdd);
+    if (IS_ERR(rdd->gd)) {
+	ret = -ENODEV;
+	goto err_blk_mq_free;
+    }
+
+    rdd->gd->fops = &pci_rd_ops;
+    rdd->gd->private_data = rdd;
+    rdd->gd->queue->queuedata = rdd;
+    snprintf(rdd->gd->disk_name, sizeof(rdd->gd->disk_name), "%s", rdd->l_name);
+    set_capacity(rdd->gd, rdd->capacity);
+    rdd->dp_thr = kthread_create(pci_remote_disk_dispatch, rdd, "rdt-%s", rdd->npr_name);
+    if (IS_ERR(rdd->dp_thr)) {
+	dev_err(dev, "Cannot create kernel dispatcher thread\n");
+	ret = PTR_ERR(rdd->dp_thr);
+	goto err_blk_mq_free;
+    }
+
+    if (rdd->read_only)
+	dev_info(dev, "%s attached in RO mode\n", rdd->npr_name);
+
+    set_disk_ro(rdd->gd, rdd->read_only);
+    device_add_disk(dev, rdd->gd, NULL);
+    rdd->attached = true;
+    return 0;
+
+err_blk_mq_free:
+    blk_mq_free_tag_set(&rdd->tag_set);
+err_free_irq:
+    devm_free_irq(dev, rdd->irq, rdd);
+err_desc_unmap:
+    kunmap(rdd->desc_page);    
+out_err:
+    return ret;
+}
+
+static int pci_remote_disk_detach_device(struct pci_remote_disk_device *rdd)
+{
+        struct device *dev = &rdd->rcom->pdev->dev;
+	struct pci_epf_blockpt_reg __iomem *base = rdd->rcom->base;
+	int ret;
+	
+	writeb(rdd->id, &base->dev_idx);
+	ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_STOP);
+	
+	if (ret) {
+	    dev_err(dev, "%s: cannot stop device\n", rdd->npr_name);
+	    return ret;
+	}
+
+	kthread_stop(rdd->dp_thr);
+	del_gendisk(rdd->gd);
+	blk_mq_free_tag_set(&rdd->tag_set);
+	devm_free_irq(dev, rdd->irq, rdd);
+	kunmap(rdd->desc_page);
+	__free_pages(rdd->desc_page, rdd->dp_order);
+
+	put_disk(rdd->gd);
+
+	rdd->attached = false;
+	rdd->irq = -EINVAL;
+	return 0;
+}
+
 static ssize_t pci_remote_disk_group_attach_store(struct config_item *item,
 						     const char *page, size_t len)
 {
     bool attach;
-    dma_addr_t phys_addr;
     struct pci_remote_disk_device *rdd = to_remote_disk_dev(item);
-    struct device *dev = &rdd->rcom->pdev->dev;
-    struct pci_epf_blockpt_reg __iomem *base = rdd->rcom->base;
     int ret = kstrtobool(page, &attach);
     
     if (ret)
 	return ret;
 
-    if (!rdd->attached && attach) {
-	rdd->descr_size = ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_driver_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64)) + ALIGN(sizeof(struct pci_blockpt_device_ring) + (NUM_DESRIPTORS * sizeof(u16)), sizeof(u64));
-
-	rdd->dp_order = get_order(rdd->descr_size);
-	/* we need page aligned memory for the descriptors, use alloc_pages() to not waste any memory */
-	rdd->desc_page = alloc_pages(GFP_KERNEL | GFP_DMA, rdd->dp_order);
-	if (!rdd->desc_page) {
-	    dev_err(dev, "could not alloc memory\n", rdd->descr_size);
-	    ret = -ENOSPC;
-	    goto out_err;
-	}
-	
-	rdd->descr_ring = kmap(rdd->desc_page);
-	phys_addr = dma_map_single(dev, rdd->descr_ring,
-			       rdd->descr_size, DMA_BIDIRECTIONAL);
-	if (dma_mapping_error(dev, phys_addr)) {
-		dev_err(dev, "failed to map descriptor address\n");
-		ret = -ENODEV;
-		goto err_desc_unmap;
-	}
-
-	rdd->drv_offset =
-		ALIGN(NUM_DESRIPTORS * sizeof(*rdd->descr_ring), sizeof(u64));
-	rdd->dev_offset =
-		rdd->drv_offset + ALIGN(sizeof(struct pci_blockpt_driver_ring) +
-						 (NUM_DESRIPTORS * sizeof(u16)),
-					 sizeof(u64));
-	writeb(rdd->id, &base->dev_idx);
-	writel(rdd->drv_offset, &base->drv_offset);
-	writel(rdd->dev_offset, &base->dev_offset);
-	dev_info(dev, "%s: Setting queue addr. #Descriptors %i (%i Bytes)\n", rdd->npr_name, NUM_DESRIPTORS, rdd->descr_size);
-	writeq(phys_addr, &base->queue_addr);
-	writel(rdd->descr_size, &base->queue_size);
-	writel(NUM_DESRIPTORS, &base->num_desc);
-	smp_wmb();
-	ret = pci_remote_bd_send_command(rdd->rcom, COMMAND_SET_QUEUE);
-	if (ret) {
-	    dev_err(dev, "%s: cannot set queue\n", rdd->npr_name);
-	    goto err_desc_unmap;
-   	}
-	
-	ret = pci_remote_bd_send_command(rdd->rcom, COMMAND_GET_NUM_SECTORS);
-	if (ret) {
-	    dev_err(dev, "%s: cannot get number of sectors\n", rdd->npr_name);
-	    goto err_desc_unmap;
-   	}
-	
-	rdd->capacity = readq(&base->num_sectors);
-	dev_info(dev, "%s capacity 0x%lx\n", rdd->r_name, rdd->capacity);
-	ret = pci_remote_bd_send_command(rdd->rcom, COMMAND_START);
-	if (ret) {
-	    dev_err(dev, "%s: cannot start device\n", rdd->npr_name);
-	    goto err_desc_unmap;
-   	}
-
-	rdd->tag_set.ops = &pci_rd_mq_ops;
-	rdd->tag_set.queue_depth = 32;
-	rdd->tag_set.numa_node = NUMA_NO_NODE;
-	rdd->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
-	rdd->tag_set.nr_hw_queues = num_present_cpus();
-	rdd->tag_set.cmd_size =
-		sizeof(struct pci_remote_disk_request) +
-		sizeof(struct scatterlist) * PCI_RBD_INLINE_SG_CNT;
-	rdd->tag_set.driver_data = rdd;
-	ret = blk_mq_alloc_tag_set(&rdd->tag_set);
-	if (ret) {
-	    dev_err(dev, "%s: Could not allocate tag set\n", rdd->npr_name);
-	    goto err_desc_unmap;
-	}
-
-	rdd->gd = blk_mq_alloc_disk(&rdd->tag_set, rdd);
-	if (IS_ERR(rdd->gd)) {
-		ret = -ENODEV;
-		goto out_free_tag_set;
-	}
-
-	rdd->gd->fops = &pci_rd_ops;
-	rdd->gd->private_data = rdd;
-	rdd->gd->queue->queuedata = rdd;
-	snprintf(rdd->gd->disk_name, sizeof(rdd->gd->disk_name), "%s", rdd->l_name);
-	set_capacity(rdd->gd, rdd->capacity);
-	rdd->dp_thr = kthread_create(pci_remote_bd_dispatch, rdd, "rdt-%s", rdd->npr_name);
-	if (IS_ERR(rdd->dp_thr)) {
-		dev_err(dev, "Cannot create kernel dispatcher thread\n");
-		ret = PTR_ERR(rdd->dp_thr);
-		goto out_free_tag_set;
-	}
-
-	device_add_disk(dev, rdd->gd, NULL);
-	rdd->attached = true;
-    } else if (rdd->attached && !attach) {
-	rdd->attached = false;
-    }
+    if (!rdd->attached && attach)
+	ret = pci_remote_disk_attach_device(rdd);
+    else if (rdd->attached && !attach)
+	ret = pci_remote_disk_detach_device(rdd);
+    else
+	ret = -EINVAL;
+    
+    if (ret < 0)
+	return ret;
     
     return len;
-    
-out_free_tag_set:
-    blk_mq_free_tag_set(&rdd->tag_set);
-err_desc_unmap:
-  kunmap(rdd->desc_page);    
-out_err:
-    return ret;
 }
 
 CONFIGFS_ATTR(pci_remote_disk_group_, attach);
@@ -341,22 +415,12 @@ static struct configfs_subsystem pci_remote_disk_subsys = {
 
 
 
-static const struct pci_device_id pci_remote_bd_tbl[] = {
+static const struct pci_device_id pci_remote_disk_tbl[] = {
 	{
 		PCI_DEVICE(0x0, 0xc402),
 	},
 	{ 0 }
 };
-
-static struct pci_blockpt_driver_ring * pci_rd_get_driver_ring(struct pci_remote_disk_device *rdd)
-{
-	return (struct pci_blockpt_driver_ring *)((u64)rdd->descr_ring + rdd->drv_offset);
-}
-
-static struct pci_blockpt_device_ring * pci_rd_get_device_ring(struct pci_remote_disk_device *rdd)
-{
-	return (struct pci_blockpt_device_ring *)((u64)rdd->descr_ring + rdd->dev_offset);
-}
 
 static int pci_rd_alloc_free_descriptor(struct pci_remote_disk_device *rdd)
 {
@@ -399,7 +463,7 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	struct device *dev = &rdd->rcom->pdev->dev;
 	struct pci_epf_blockpt_descr __iomem *dtu;
-	struct pci_blockpt_driver_ring __iomem *drv_ring = pci_rd_get_driver_ring(rdd);
+	struct pci_blockpt_driver_ring __iomem *drv_ring = rdd->drv_ring;
 	dma_addr_t dma_addr;
 	char *buf;
 	int err;
@@ -520,8 +584,12 @@ static int pci_rd_compat_ioctl(struct block_device *bdev, fmode_t mode,
 
 static irqreturn_t pci_rd_irqhandler(int irq, void *dev_id)
 {
-	struct pci_remote_disk_common *rcom = dev_id;
-	dev_err(&rcom->pdev->dev, "%s\n", __FUNCTION__);
+	struct pci_remote_disk_device *rdd = dev_id;
+	struct device *dev = &rdd->rcom->pdev->dev;
+	
+	dev_info(dev, "IRQ %s fired\n", __FUNCTION__, rdd->r_name);
+	wake_up_process(rdd->dp_thr);
+	
 	return IRQ_HANDLED;
 }
 
@@ -535,11 +603,11 @@ static void pci_rd_clear_descriptor(struct pci_remote_disk_device *rdd, struct p
     spin_unlock_irqrestore(&rdd->lock, flags);
 }
 
-static int pci_remote_bd_dispatch(void *cookie)
+static int pci_remote_disk_dispatch(void *cookie)
 {
     struct pci_remote_disk_device *rdd = cookie;
     struct device *dev = &rdd->rcom->pdev->dev;
-    struct pci_blockpt_device_ring *dev_ring = pci_rd_get_device_ring(rdd);
+    struct pci_blockpt_device_ring __iomem *dev_ring = rdd->dev_ring;
     struct req_iterator iter;
     struct bio_vec bv;
 
@@ -585,7 +653,7 @@ static int pci_remote_bd_dispatch(void *cookie)
     return 0;
 }
 
-static int pci_remote_parse_disks(struct pci_remote_disk_common *rcom)
+static int pci_remote_disk_parse(struct pci_remote_disk_common *rcom)
 {
     struct pci_remote_disk_device *rdd;
     struct list_head *lh, *lhtmp;
@@ -606,6 +674,7 @@ static int pci_remote_parse_disks(struct pci_remote_disk_common *rcom)
 	    goto err_free;
 	}
 
+	rdd->irq = -EINVAL;
 	rdd->descr_tags = kzalloc((sizeof(u64) * NUM_DESRIPTORS), GFP_KERNEL);
 	if (!rdd->descr_tags) {
 	    dev_err(dev, "Could not allocate descriptor tags\n");
@@ -668,13 +737,12 @@ err_free:
     return err;
 }
 
-static int pci_remote_bd_probe(struct pci_dev *pdev,
+static int pci_remote_disk_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *ent)
 {
 	struct device *dev = &pdev->dev;
-	int err;
+	int err, num;
 	enum pci_barno bar;
-	int i;
 	enum pci_barno def_reg_bar = BAR_0;
 	void __iomem *base;
 	struct pci_remote_disk_common *rcom =
@@ -703,10 +771,7 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	}
 
 	pci_set_master(pdev);
-	rcom->num_irqs = pci_alloc_irq_vectors(pdev, 1, 32, PCI_IRQ_MSI);
-	if (rcom->num_irqs < 0)
-		dev_err(dev, "Failed to get MSI interrupts\n");
-
+	
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
 		if (pci_resource_flags(pdev, bar) & IORESOURCE_MEM) {
 			base = pci_ioremap_bar(pdev, bar);
@@ -726,13 +791,13 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 		goto err_iounmap;
 	}
 
-	if (rcom->base->magic != RBD_MAGIC) {
-	    dev_err(dev, "Invalid magic at BAR0 detected. Expected 0x%x. Read 0x%x\n", RBD_MAGIC, rcom->base->magic);
+	if (rcom->base->magic != BLOCKPT_MAGIC) {
+	    dev_err(dev, "Invalid magic at BAR0 detected. Expected 0x%x. Read 0x%x\n", BLOCKPT_MAGIC, rcom->base->magic);
 	    err = -ENODEV;
 	    goto err_iounmap;
 	}
 
-	err = pci_remote_bd_send_command(rcom, COMMAND_GET_DEVICES);
+	err = pci_remote_disk_send_command(rcom, BPT_COMMAND_GET_DEVICES);
 	if (err) {
 	    dev_err(dev, "Cannot get devices\n");
 	    goto err_iounmap;
@@ -748,33 +813,22 @@ static int pci_remote_bd_probe(struct pci_dev *pdev,
 	}
 	
 	INIT_LIST_HEAD(&available_remote_disks);
-	err = pci_remote_parse_disks(rcom);
-	if (err <= 0) {
+	num = pci_remote_disk_parse(rcom);
+	if (num <= 0) {
 	    dev_err(dev, "Unable to parse any valid disk\n");
 	    err = -ENODEV;
 	    goto err_iounmap;
 	}
 
-	dev_info(dev, "Found %i devices\n", err);
-	pci_set_drvdata(pdev, rcom);
-	for (i = 0; i < rcom->num_irqs; i++) {
-	    err = devm_request_irq(dev, pci_irq_vector(pdev, i),
-				   pci_rd_irqhandler, IRQF_SHARED,
-				   "rd-irq", rcom);
-	    if (err) {
-		dev_err(dev, "Unable to register irq %i\n", i);
-		goto out_free_irq;
-		
-	    }
-	}
+	dev_info(dev, "Found %i devices\n", num);
+	/* alloc one vector for each device */
+	rcom->num_irqs = pci_alloc_irq_vectors(pdev, 1, num, PCI_IRQ_MSIX);
+	if (rcom->num_irqs < num)
+	    dev_err(dev, "Failed to get %i MSI-X interrupts: Returned %i\n", num, rcom->num_irqs);
 
+	pci_set_drvdata(pdev, rcom);
 	return 0;
-	
-out_free_irq:
-	for (i = 0; i < rcom->num_irqs; i++) {
-		devm_free_irq(dev, pci_irq_vector(pdev, i), rcom);
-	}
-	rcom->num_irqs = 0;
+
 err_iounmap:
 	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
 		if (rcom->bar[bar])
@@ -790,15 +844,20 @@ out_free_dev:
 	return err;
 }
 
-static void pci_remote_bd_remove(struct pci_dev *pdev)
+static void pci_remote_disk_remove(struct pci_dev *pdev)
 {
     struct device *dev = &pdev->dev;
     struct pci_remote_disk_common *rcom = pci_get_drvdata(pdev);
+    struct pci_epf_blockpt_reg __iomem *base = rcom->base;
     struct pci_remote_disk_device *rdd, *tmp_rdd;
-    int i;
+    int i, ret;
     
     list_for_each_entry_safe(rdd, tmp_rdd, &available_remote_disks, node) {
 	if (rdd->attached) {
+	    writeb(rdd->id, &base->dev_idx);
+	    ret = pci_remote_disk_send_command(rdd->rcom, BPT_COMMAND_STOP);
+	    if (ret) 
+		dev_err(dev, "%s: cannot stop device\n", rdd->npr_name);
 	    kthread_stop(rdd->dp_thr);
 	    
 	    del_gendisk(rdd->gd);
@@ -811,18 +870,16 @@ static void pci_remote_bd_remove(struct pci_dev *pdev)
 	kfree(rdd->r_name);
 	kfree(rdd->l_name);
 	configfs_unregister_group(&rdd->cfs_group);
-
+	if (rdd->irq != -EINVAL)
+	    devm_free_irq(dev, rdd->irq, rdd);
 	list_del(&rdd->node);
 	kfree(rdd->descr_tags);
 	kfree(rdd);
     }
 
     configfs_unregister_subsystem(&pci_remote_disk_subsys);
-    for (i = 0; i < rcom->num_irqs; i++) {
-	devm_free_irq(dev, pci_irq_vector(pdev, i), rcom);
-    }
-    
     rcom->num_irqs = 0;
+    
     for (i = 0; i < PCI_STD_NUM_BARS; i++) {
 	if (rcom->bar[i])
 	    pci_iounmap(pdev, rcom->bar[i]);
@@ -834,17 +891,17 @@ static void pci_remote_bd_remove(struct pci_dev *pdev)
     devm_kfree(dev, rcom);
 }
 
-MODULE_DEVICE_TABLE(pci, pci_remote_bd_tbl);
+MODULE_DEVICE_TABLE(pci, pci_remote_disk_tbl);
 
-static struct pci_driver pci_remote_bdev_driver = {
+static struct pci_driver pci_remote_disk_driver = {
 	.name = DRV_MODULE_NAME,
-	.id_table = pci_remote_bd_tbl,
-	.probe = pci_remote_bd_probe,
-	.remove = pci_remote_bd_remove,
+	.id_table = pci_remote_disk_tbl,
+	.probe = pci_remote_disk_probe,
+	.remove = pci_remote_disk_remove,
 	.sriov_configure = pci_sriov_configure_simple,
 };
 
-module_pci_driver(pci_remote_bdev_driver);
+module_pci_driver(pci_remote_disk_driver);
 
 MODULE_AUTHOR("Wadim Mueller <wadim.mueller@continental.com>");
 MODULE_DESCRIPTION("Remote PCI Endpoint Disk driver");

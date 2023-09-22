@@ -8,7 +8,7 @@
 
 /*
  * PCI Block Device Passthrough allows one Linux Device to expose its Block devices to the PCI(e) host.
- * The device can export either the full disk or just certain partitions. Also an export in readonly mode is possible.
+ * The device can export either the full disk or just certain partitions. 
  * The PCI Block Passthrough function driver is the part running on SoC2 from the diagram below. For more details refer
  * to Documentation/PCI/endpoint/pci-endpoint-block-passthru-function.rst
  *
@@ -90,6 +90,7 @@ struct pci_epf_blockpt_device {
         char *dev_name;
         bool read_only;
         bool attached;
+        int irq;
 #ifdef USE_DMAENGINE	
         struct dma_chan *dma_chan;
 #endif
@@ -148,9 +149,9 @@ struct pci_epf_blockpt_info {
 };
 #define blockpt_retry_delay()  usleep_range(100, 500)
 
-static int pci_blockpt_digest_descriptor(void *);
-static int pci_blockpt_bio_submit(void *);
-static int pci_blockpt_dispatch_desc_on_cpu(void *);
+static int pci_blockpt_digest_descriptor_kthread(void *);
+static int pci_blockpt_bio_submit_kthread(void *);
+static int pci_blockpt_dispatch_desc_on_cpu_kthread(void *);
 
 static int pci_epf_blockpt_map_queue(struct pci_epf_blockpt_device *bpt_dev, struct pci_epf_blockpt_reg *reg) {
         int ret;
@@ -197,34 +198,41 @@ static void pci_epf_blockpt_set_invalid_id_error(struct pci_blockpt_device_commo
     writel(BPT_STATUS_ERROR, &reg->status);
 }
 
-static struct pci_epf_blockpt_device *pci_epf_blockpt_get_device_by_id(u8 id)
+static struct pci_epf_blockpt_device *pci_epf_blockpt_get_device_by_id(struct pci_blockpt_device_common *dcom, u8 id)
 {
     struct list_head *lh;
     struct pci_epf_blockpt_device *bpt_dev;
-    list_for_each_rcu(lh, &exportable_bds) {
+    
+    list_for_each(lh, &exportable_bds) {
 	bpt_dev = list_entry(lh, struct pci_epf_blockpt_device, node);
 	if (bpt_dev->dev_tag == id)
 	    return bpt_dev;
     }
-    
+
+    list_for_each(lh, &dcom->devices) {
+	bpt_dev = list_entry(lh, struct pci_epf_blockpt_device, node);
+	if (bpt_dev->dev_tag == id)
+	    return bpt_dev;
+    }
+
     return NULL;
 }
 
 static void move_bpt_device_to_active_list(struct pci_epf_blockpt_device *bpt_dev)
 {
     spin_lock(&bpt_dev->nm_lock);
-    list_del_rcu(&bpt_dev->node);
+    list_del(&bpt_dev->node);
     INIT_LIST_HEAD(&bpt_dev->node);
-    list_add_tail_rcu(&bpt_dev->node, &bpt_dev->dcommon->devices);
+    list_add_tail(&bpt_dev->node, &bpt_dev->dcommon->devices);
     spin_unlock(&bpt_dev->nm_lock);
 }
 
 static void move_bpt_device_to_exportable_list(struct pci_epf_blockpt_device *bpt_dev)
 {
     spin_lock(&bpt_dev->nm_lock);
-    list_del_rcu(&bpt_dev->node);
+    list_del(&bpt_dev->node);
     INIT_LIST_HEAD(&bpt_dev->node);
-    list_add_tail_rcu(&bpt_dev->node, &exportable_bds);
+    list_add_tail(&bpt_dev->node, &exportable_bds);
     spin_unlock(&bpt_dev->nm_lock);
 }
 
@@ -341,21 +349,23 @@ static void pci_epf_blockpt_transfer_complete(struct bio *bio)
 static void destroy_all_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
 {
     int cpu;
-    
-    for_each_present_cpu (cpu) {
-	if (bpt_dev->produce_thr[cpu]) {
-	    kthread_stop(bpt_dev->produce_thr[cpu]);
-	    bpt_dev->produce_thr[cpu] = NULL;
-	}
-	if (bpt_dev->digest_thr[cpu]) {
-	    kthread_stop(bpt_dev->digest_thr[cpu]);
-	    bpt_dev->digest_thr[cpu] = NULL;
-	}
-    }
+
     if (bpt_dev->dispatch_thr) {
 	kthread_stop(bpt_dev->dispatch_thr);
 	bpt_dev->dispatch_thr = NULL;
     }
+    
+    for_each_present_cpu (cpu) {
+	if (bpt_dev->produce_thr[cpu]) {
+	    up(per_cpu_ptr(bpt_dev->proc_sem, cpu));
+	    bpt_dev->produce_thr[cpu] = NULL;
+	}
+	if (bpt_dev->digest_thr[cpu]) {
+	    up(per_cpu_ptr(bpt_dev->disp_sem, cpu));
+	    bpt_dev->digest_thr[cpu] = NULL;
+	}
+    }
+
 }
 
 static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
@@ -367,9 +377,9 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
     for_each_present_cpu(cpu) {
 	if (cpu >= bpt_dev->max_cpu)
 	    break;
-	snprintf(tname, sizeof(tname), "bptd-%s/%d", bpt_dev->dev_name, cpu);
+	snprintf(tname, sizeof(tname), "bpt-dig-%s/%d", bpt_dev->dev_name, cpu);
 	dev_dbg(dev, "Creating thread %s\n", tname);
-	bpt_dev->digest_thr[cpu] = kthread_create_on_cpu(pci_blockpt_digest_descriptor, bpt_dev, cpu, tname);
+	bpt_dev->digest_thr[cpu] = kthread_create_on_cpu(pci_blockpt_digest_descriptor_kthread, bpt_dev, cpu, tname);
 	if (IS_ERR(bpt_dev->digest_thr[cpu])) {
 	    ret = PTR_ERR(bpt_dev->digest_thr[cpu]);
 	    dev_err(dev, "%s Could not create digest kernel thread: %i\n", bpt_dev->device_path, ret);
@@ -382,9 +392,9 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
     for_each_present_cpu (cpu) {
 	if (cpu >= bpt_dev->max_cpu)
 	    break;
-	snprintf(tname, sizeof(tname), "bptb-%s/%d", bpt_dev->dev_name, cpu);
+	snprintf(tname, sizeof(tname), "bpt-sub-%s/%d", bpt_dev->dev_name, cpu);
 	dev_dbg(dev, "Creating thread %s\n", tname);
-	bpt_dev->produce_thr[cpu] = kthread_create_on_cpu(pci_blockpt_bio_submit, bpt_dev, cpu, tname);
+	bpt_dev->produce_thr[cpu] = kthread_create_on_cpu(pci_blockpt_bio_submit_kthread, bpt_dev, cpu, tname);
 	if (IS_ERR(bpt_dev->produce_thr[cpu])) {
 	    ret = PTR_ERR(bpt_dev->produce_thr[cpu]);
 	    dev_err(dev, "%s Could not create bio submit kernel thread: %i\n", bpt_dev->device_path, ret);
@@ -394,7 +404,7 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
 	wake_up_process(bpt_dev->produce_thr[cpu]);
     }
 
-    bpt_dev->dispatch_thr = kthread_create(pci_blockpt_dispatch_desc_on_cpu, bpt_dev, "bpt-disp/%s" , bpt_dev->dev_name);
+    bpt_dev->dispatch_thr = kthread_create(pci_blockpt_dispatch_desc_on_cpu_kthread, bpt_dev, "bpt-disp/%s" , bpt_dev->dev_name);
     if (IS_ERR(bpt_dev->dispatch_thr)) {
 	ret = PTR_ERR(bpt_dev->dispatch_thr);
 	dev_err(dev, "%s: Could not create dispatcher kernel thread %i\n", bpt_dev->device_path, ret);
@@ -414,7 +424,7 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
     }
 #endif
 	
-  check_start_errors:
+check_start_errors:
     if (ret) {
 	destroy_all_worker_threads(bpt_dev);
     } else {
@@ -467,21 +477,21 @@ static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
     writel(0, &reg->command);
     writel(0, &reg->status);
 
-    if (command != 0 && list_empty(&exportable_bds)) {
+    if (command != 0 && list_empty(&exportable_bds) && list_empty(&dcommon->devices)) {
 	dev_err_ratelimited(dev, "Available Devices must be configured first through ConfigFS, before remote partner can send any command\n");
 	goto reset_handler;
     }
 
-    bpt_dev = pci_epf_blockpt_get_device_by_id(readb(&reg->dev_idx));
+    bpt_dev = pci_epf_blockpt_get_device_by_id(dcommon, readb(&reg->dev_idx));
     if (!bpt_dev) {
 	pci_epf_blockpt_set_invalid_id_error(dcommon, reg);
 	goto reset_handler;
     }
 
-    if (command & COMMAND_GET_DEVICES) {
+    if (command & BPT_COMMAND_GET_DEVICES) {
 	int nidx = 0;
 	dev_info(dev, "Request for available devices received\n");
-	list_for_each_rcu(lh, &exportable_bds) {
+	list_for_each(lh, &exportable_bds) {
 	    struct pci_epf_blockpt_device *bpt_dev = list_entry(lh, struct pci_epf_blockpt_device, node);
 	    nidx += snprintf(&reg->dev_name[nidx], 64, "%s%s", (nidx == 0) ? "" : ";", bpt_dev->device_path);
 	}
@@ -489,20 +499,31 @@ static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
 	sprintf(&reg->dev_name[nidx] , "%s", ";");
     }
 
-    if (command & COMMAND_GET_NUM_SECTORS) {
+    if (command & BPT_COMMAND_SET_IRQ) {
+	dev_info(dev, "%s setting IRQ %i\n", bpt_dev->device_path, readl(&reg->irq));
+	bpt_dev->irq = readl(&reg->irq);
+    }
+
+    if (command & BPT_COMMAND_GET_NUM_SECTORS) {
 	dev_info(dev, "Request for %s number of sectors received\n", bpt_dev->device_path);
 	writeq(bdev_nr_sectors(bpt_dev->bd), &reg->num_sectors);
     }
 
-    if (command & COMMAND_SET_QUEUE) {
+    if (command & BPT_COMMAND_SET_QUEUE) {
 	ret = set_device_descriptor_queue(bpt_dev);
 	if (ret) {
 	    writel(BPT_STATUS_ERROR, &reg->status);
 	    goto reset_handler;
 	}
+	/* if the queue was (re)set, we need to reset the device and driver indices */
+	bpt_dev->dev_idx = bpt_dev->drv_idx = 0;
     }
 
-    if (command & COMMAND_START) {
+    if (command & BPT_COMMAND_GET_PERMISSION) {
+	writel(bpt_dev->read_only ? BPT_PERMISSION_RO : 0, &reg->perm);
+    }
+
+    if (command & BPT_COMMAND_START) {
 	ret = start_bpt_worker_threads(bpt_dev);
 	if (ret) {
 	    writel(BPT_STATUS_ERROR, &reg->status);
@@ -513,12 +534,14 @@ static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
 	bpt_dev->attached = true;
     }
 
-    if (command & COMMAND_STOP) {
-	if (!list_empty(&bpt_dev->dcommon->devices)) {
+    if (command & BPT_COMMAND_STOP) {
+	if (bpt_dev->attached) {
 	    destroy_all_worker_threads(bpt_dev);
 	    move_bpt_device_to_exportable_list(bpt_dev);
+	    dev_info(dev, "%s stopped\n", bpt_dev->dev_name);
 	    bpt_dev->attached = false;
 	} else {
+	    dev_err(dev, "%s try to stop a device which was not started. \n", bpt_dev->dev_name);
 	    writel(BPT_STATUS_ERROR, &reg->status);
 	    goto reset_handler;
 	}
@@ -765,7 +788,7 @@ static void pci_epf_blockpt_dma_callback(void *param)
 #endif
 
 
-static int pci_blockpt_dispatch_desc_on_cpu(void *__bpt_dev)
+static int pci_blockpt_dispatch_desc_on_cpu_kthread(void *__bpt_dev)
 {
     struct pci_blockt_dispatch_descriptor *bpt_dd;
     struct pci_epf_blockpt_device *bpt_dev = __bpt_dev;
@@ -800,11 +823,12 @@ static int pci_blockpt_dispatch_desc_on_cpu(void *__bpt_dev)
 	}
 	msleep(DRV_RING_POLL_INTERVAL_MS);
     }
-    
+
+    dev_info(dev, "Dispatcher thread stopped\n");
     return 0;
 }
 
-static int pci_blockpt_bio_submit(void *__bpt_dev)
+static int pci_blockpt_bio_submit_kthread(void *__bpt_dev)
 {
     struct pci_blockt_dispatch_descriptor *bpt_dd;
     struct pci_epf_blockpt_device *bpt_dev = __bpt_dev;
@@ -826,8 +850,12 @@ static int pci_blockpt_bio_submit(void *__bpt_dev)
 	down(sem);
 	/* Here no lock is needed as the first element should always be there, guaranteed by the semaphore and cannot be removed underneath us*/
 	bpt_dd = list_first_entry_or_null(cpu_list, struct pci_blockt_dispatch_descriptor, node);
-	    
-	BUG_ON(bpt_dd == NULL);
+
+	/* This can only happen if the thread supposed to be stopped */
+	if (bpt_dd == NULL) {
+	    dev_info(dev, "submit thread on cpu %u stopped\n", smp_processor_id());
+	    return 0;
+	}
 
 	de = bpt_dd->desc_idx;
 	descr = &bpt_dev->descr[de];
@@ -858,7 +886,7 @@ static int pci_blockpt_bio_submit(void *__bpt_dev)
 	    }
 #ifdef USE_DMAENGINE
 	    if (bpt_dev->dma_chan) {
-		dma_txd = dmaengine_prep_dma_memcpy(bpt_dev->dma_chan, page_to_phys(bio_info->page), bio_info->phys_addr, loc_descr.len, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
+		dma_txd = dmaengine_prep_dma_memcpy(bpt_dev->dma_chan, bio_info->dma_addr, bio_info->phys_addr, loc_descr.len, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
 		if (!dma_txd) {
 		    ret = -ENODEV;
 		    dev_err(dev, "Failed to prepare DMA memcpy\n");
@@ -934,7 +962,7 @@ err_retry:
 }
 
 
-static int pci_blockpt_digest_descriptor(void *__bpt_dev)
+static int pci_blockpt_digest_descriptor_kthread(void *__bpt_dev)
 {
 	struct pci_epf_blockpt_device *bpt_dev = __bpt_dev;
 	struct device *dev = &bpt_dev->dcommon->epf->dev;
@@ -952,8 +980,13 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 	    down(sem);
 	    /* the semaphore assures that the first element is always there, so no lock needed here */
 	    bi = list_first_entry_or_null(cpu_list, struct pci_epf_blockpt_info, node);
+
+	   /* This can only happen if the thread supposed to be stopped */
+	    if (bi == NULL) {
+		dev_info(dev, "digest thread on cpu %u stopped\n", smp_processor_id());
+		return 0;
+	    }
 	    
-	    BUG_ON(bi == NULL);
 	    /* using a local copy of the descriptor avoids unneccessary pci bus accesses */
 	    memcpy_fromio(&loc_descr, bi->descr, sizeof(loc_descr));
 	    BUG_ON(!(loc_descr.si.flags & PBI_EPF_BLOCKPT_F_USED));
@@ -1020,6 +1053,8 @@ static int pci_blockpt_digest_descriptor(void *__bpt_dev)
 	    bi->bpt_dev->dev_idx = (bi->bpt_dev->dev_idx + 1) % bi->bpt_dev->num_desc;
 	    writew(bi->bpt_dev->dev_idx, &bi->bpt_dev->device_ring->idx);
 	    spin_unlock(&bi->bpt_dev->dev_lock);
+	    dev_info(dev, "%s lets raise irq #%i\n", bpt_dev->dev_name, bpt_dev->irq);
+	    /* pci_epc_raise_irq(epf->epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_MSIX, bi->bpt_dev->irq); */
 	    free_pci_blockpt_info(bi);
 	    continue;
 err_retry:
@@ -1092,9 +1127,8 @@ static void pci_epf_blockpt_remove(struct pci_epf *epf)
 	blkdev_put(bpt_dev->bd, bpt_dev->read_only ? FMODE_READ : (FMODE_READ | FMODE_WRITE));
 	
 	spin_lock_irqsave(&bpt_dev->nm_lock, flags);
-	list_del_rcu(&bpt_dev->node);
+	list_del(&bpt_dev->node);
 	spin_unlock_irqrestore(&bpt_dev->nm_lock, flags);
-	synchronize_rcu();
 
 	for_each_present_cpu (cpu) {
 	    list_for_each_entry_safe (bio_info, bntmp, per_cpu_ptr(bpt_dev->proc_list, cpu),
@@ -1159,7 +1193,7 @@ static ssize_t pci_blockpt_disc_name_store(struct config_item *item,
 	
     
     spin_lock_irqsave(&bpt_dev->nm_lock, flags);
-    list_add_tail_rcu(&bpt_dev->node, &exportable_bds);
+    list_add_tail(&bpt_dev->node, &exportable_bds);
     spin_unlock_irqrestore(&bpt_dev->nm_lock, flags);
     return len;
 }
@@ -1212,7 +1246,7 @@ static ssize_t pci_blockpt_read_only_show(struct config_item *item,
 					   char *page)
 {
     struct pci_epf_blockpt_device *bpt_dev = to_blockpt_dev(item);
-    return sprintf(page, "%s\n", bpt_dev->read_only);
+    return sprintf(page, "%i\n", bpt_dev->read_only);
 }
 
 static ssize_t pci_blockpt_read_only_store(struct config_item *item,

@@ -17,15 +17,19 @@
 
 #define PBI_EPF_BLOCKPT_F_USED          BIT(1)
 
-#define COMMAND_SET_QUEUE               BIT(6)
-#define COMMAND_GET_DEVICES             BIT(7)
-#define COMMAND_START                   BIT(8)
-#define COMMAND_GET_NUM_SECTORS         BIT(9)
-#define COMMAND_STOP                    BIT(10)
+#define BPT_COMMAND_SET_QUEUE               BIT(6)
+#define BPT_COMMAND_GET_DEVICES             BIT(7)
+#define BPT_COMMAND_START                   BIT(8)
+#define BPT_COMMAND_GET_NUM_SECTORS         BIT(9)
+#define BPT_COMMAND_STOP                    BIT(10)
+#define BPT_COMMAND_SET_IRQ                 BIT(11)
+#define BPT_COMMAND_GET_PERMISSION          BIT(12)
 
 #define BPT_STATUS_SUCCESS	        BIT(0)
 #define BPT_STATUS_ERROR	        BIT(8)
 #define BPT_STATUS_QUEUE_ADDR_INVALID	BIT(9)
+
+#define BPT_PERMISSION_RO               BIT(0)
 
 struct pci_epf_blockpt_reg {
 	u32	magic;
@@ -34,11 +38,11 @@ struct pci_epf_blockpt_reg {
         u32     queue_size;  /* number of struct pci_epf_blockpt_descr */
         u32     drv_offset;
         u32     dev_offset;
-	u32	res_l0;
         u32	num_desc;
         u32     max_devs;
+        u32     irq; 
         u8      dev_idx;
-        u8      res_b0;
+        u8      perm;
         u8      res_b1;
         u8      res_b2;
         u64	queue_addr;  /* start of struct pci_epf_blockpt_descr*/
