@@ -8,7 +8,7 @@ PCI Block Device Passthrough Function
 
 PCI Block Device Passthrough allows one Linux Device to expose its Block devices to the PCI(e) host. The device can export either the full disk or just certain partitions. Also an export in readonly mode is possible.
 
-This feature is useful if you have a direct connection between two PCI capable SoC's, one running as Root Complex and the other in Endpoint mode, and you want to provide the RC device access to some (or all) Block devices attached to the SoC running is EP mode. This is to a certain extent a similar functionality which NTB exposes over Network, but on the PCI(e) bus utilizing the EPC/EPF Kernel Framework.
+This feature is useful if you have a direct connection between two PCI capable SoC's, one running as Root Complex and the other in Endpoint mode, and you want to provide the RC device access to some (or all) Block devices attached to the SoC running is EP mode. This is to a certain extent a similar functionality which NBD exposes over Network, but on the PCI(e) bus utilizing the EPC/EPF Kernel Framework.
 
 The below diagram shows a possible setup with two SoCs, SoC1 working in RC mode, SoC2 in EP mode.
 SoC2 can now export the NVMe, eMMC and the SD Card attached to it (full Disks or some Partitions). For this
@@ -206,17 +206,17 @@ Descriptor Layout
 -----------------------
 .. code-block:: text
 
-		         	+------------------------+
-                         	|        s_sector        |
-				|                        | 
-                         	+------------------------+
-                         	|          addr          |
-				|                        |
-                         	+------------------------+
-                         	|          len           |
-                         	+------------------------+
-                         	| opf | stat|flags | res |
-                         	+------------------------+
+		         	+--------------------------+
+                         	|         s_sector         |
+				|                          | 
+                         	+--------------------------+
+                         	|           addr           |
+				|                          |
+                         	+--------------------------+
+                         	|           len            |
+                         	+--------------------------+
+                         	| opf | stat | flags | res |
+                         	+--------------------------+
 
 
 .. _driver entry layout: 		
@@ -226,18 +226,18 @@ Driver Entry Layout
 .. code-block:: text
 
 		         	+------------------------+
-                         	|          idx           |
-                         	+------------------------+
-                         	|     descriptor idx 0   |
-                         	+------------------------+
-                         	|     descriptor idx 1   |
-                         	+------------------------+
-                         	|            :           |
-                         	+------------------------+
-                         	|            :           |
-                         	+------------------------+
-                         	|descriptor idx NUM_DESC |
-                         	+------------------------+
+                         	|          idx           |----+
+                         	+------------------------+    |
+                         	|     descriptor idx 0   |    |
+                         	+------------------------+    |            
+                         	|     descriptor idx 1   |    |         +----------------+
+                         	+------------------------+    |         |  Descriptor x  | 
+                         	|            :           |    |         +----------------+ 
+                         	+------------------------+<---+         | Descriptor x+1 | 
+                         	|            :           |------------->+----------------+ 
+                         	+------------------------+              | Descriptor x+2 | 
+                         	|descriptor idx NUM_DESC |              +----------------+
+                         	+------------------------+              
 
 
 .. _device entry layout:				
@@ -247,18 +247,19 @@ Device Entry Layout
 .. code-block:: text
 
 		         	+------------------------+
-                         	|          idx           |
-                         	+------------------------+
-                         	|     descriptor idx 0   |
-                         	+------------------------+
-                         	|     descriptor idx 1   |
-                         	+------------------------+
-                         	|            :           |
-                         	+------------------------+
-                         	|            :           |
-                         	+------------------------+
-                         	|descriptor idx NUM_DESC |
-                         	+------------------------+
+                         	|          idx           |----+
+                         	+------------------------+    |
+                         	|     descriptor idx 0   |    |
+                         	+------------------------+    |            
+                         	|     descriptor idx 1   |    |         +----------------+
+                         	+------------------------+    |         |  Descriptor x  | 
+                         	|            :           |    |         +----------------+ 
+                         	+------------------------+<---+         | Descriptor x+1 | 
+                         	|            :           |------------->+----------------+ 
+                         	+------------------------+              | Descriptor x+2 | 
+                         	|descriptor idx NUM_DESC |              +----------------+
+                         	+------------------------+ 
+
 				
 		
 .. _descriptor queue layout:
@@ -285,7 +286,7 @@ Descriptor Queue Layout
                          	|           :            |
                          	+------------------------+
      Device Offset ----->       +------------------------+
-                         	|     Driver Ring        |
+                         	|     Device Ring        |
      			        |           :            |
                          	|           :            |
                          	+------------------------+
