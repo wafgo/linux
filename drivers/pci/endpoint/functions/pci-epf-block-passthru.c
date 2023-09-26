@@ -90,7 +90,7 @@ struct pci_epf_blockpt_device {
         char *dev_name;
         bool read_only;
         bool attached;
-        int irq;
+
 #ifdef USE_DMAENGINE	
         struct dma_chan *dma_chan;
 #endif
@@ -107,6 +107,7 @@ struct pci_epf_blockpt_device {
         struct semaphore __percpu *proc_sem;
         struct semaphore __percpu *disp_sem;
 
+        int __percpu *irq;
         spinlock_t dev_lock;
         spinlock_t nm_lock; 
 };
@@ -462,7 +463,7 @@ static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
     struct pci_blockpt_device_common *dcommon = container_of(work, struct pci_blockpt_device_common,
 							 cmd_handler.work);
     u32 command;
-    int ret;
+    int ret, cpu;
     struct pci_epf *epf = dcommon->epf;
     struct pci_epf_blockpt_reg *reg = dcommon->bpt_regs;
     struct pci_epf_blockpt_device *bpt_dev;
@@ -500,8 +501,11 @@ static void pci_epf_blockpt_cmd_handler(struct work_struct *work)
     }
 
     if (command & BPT_COMMAND_SET_IRQ) {
-	dev_info(dev, "%s setting IRQ %i\n", bpt_dev->device_path, readl(&reg->irq));
-	bpt_dev->irq = readl(&reg->irq);
+	dev_info(dev, "%s setting IRQ %i\n", bpt_dev->device_path, readl(&reg->start_irq));
+
+	for_each_possible_cpu (cpu) {
+	    *per_cpu_ptr(bpt_dev->irq, cpu) = readl(&reg->start_irq) + cpu;
+	}
     }
 
     if (command & BPT_COMMAND_GET_NUM_SECTORS) {
@@ -756,6 +760,7 @@ static int pci_epf_blockpt_bind(struct pci_epf *epf)
 
 	breg = (struct pci_epf_blockpt_reg *) dcommon->bpt_regs;
 	breg->magic = BLOCKPT_MAGIC;
+	breg->irqs_per_device = num_present_cpus();
 	breg->max_devs = MAX_BLOCK_DEVS;
 	if (!core_init_notifier) {
 		ret = pci_epf_blockpt_core_init(epf);
@@ -970,6 +975,7 @@ static int pci_blockpt_digest_descriptor_kthread(void *__bpt_dev)
 	struct pci_epf_blockpt_info *bi;
 	struct pci_epf_blockpt_descr loc_descr;
 	int ret;
+	int irq = *this_cpu_ptr(bpt_dev->irq);
 	struct list_head *cpu_list = this_cpu_ptr(bpt_dev->proc_list);
 	struct semaphore *sem = this_cpu_ptr(bpt_dev->proc_sem);
 	__maybe_unused struct dma_async_tx_descriptor *dma_rxd;
@@ -1048,13 +1054,12 @@ static int pci_blockpt_digest_descriptor_kthread(void *__bpt_dev)
 #endif		
 	    }
 	    
-	    spin_lock(&bi->bpt_dev->dev_lock);
-	    writew(bi->descr_idx, &bi->bpt_dev->device_ring->ring[bi->bpt_dev->dev_idx]);
-	    bi->bpt_dev->dev_idx = (bi->bpt_dev->dev_idx + 1) % bi->bpt_dev->num_desc;
-	    writew(bi->bpt_dev->dev_idx, &bi->bpt_dev->device_ring->idx);
-	    spin_unlock(&bi->bpt_dev->dev_lock);
-	    dev_info(dev, "%s lets raise irq #%i\n", bpt_dev->dev_name, bpt_dev->irq);
-	    /* pci_epc_raise_irq(epf->epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_MSIX, bi->bpt_dev->irq); */
+	    spin_lock(&bpt_dev->dev_lock);
+	    writew(bi->descr_idx, &bpt_dev->device_ring->ring[bpt_dev->dev_idx]);
+	    bpt_dev->dev_idx = (bpt_dev->dev_idx + 1) % bpt_dev->num_desc;
+	    writew(bpt_dev->dev_idx, &bpt_dev->device_ring->idx);
+	    spin_unlock(&bpt_dev->dev_lock);
+	    pci_epc_raise_irq(epf->epc, epf->func_no, epf->vfunc_no, PCI_EPC_IRQ_MSIX, irq);
 	    free_pci_blockpt_info(bi);
 	    continue;
 err_retry:
@@ -1110,6 +1115,10 @@ static void blockpt_free_per_cpu_data(struct pci_epf_blockpt_device *bpt_dev)
     if (bpt_dev->disp_sem) {
 	free_percpu(bpt_dev->disp_sem);
 	bpt_dev->disp_sem = NULL;
+    }
+    if (bpt_dev->irq) {
+	free_percpu(bpt_dev->irq);
+	bpt_dev->irq = NULL;
     }
 }
 
@@ -1343,6 +1352,11 @@ static int blockpt_alloc_per_cpu_data(struct pci_epf_blockpt_device *bpt_dev)
 
     for_each_possible_cpu (cpu) {
 	INIT_LIST_HEAD(per_cpu_ptr(bpt_dev->disp_list, cpu));
+    }
+
+    bpt_dev->irq = alloc_percpu(int);
+    for_each_possible_cpu (cpu) {
+	*per_cpu_ptr(bpt_dev->irq, cpu) = -EINVAL;
     }
 
     return 0;

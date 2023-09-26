@@ -40,7 +40,9 @@ struct pci_epf_blockpt_reg {
         u32     dev_offset;
         u32	num_desc;
         u32     max_devs;
-        u32     irq; 
+        u32     start_irq;
+        u32     irqs_per_device;
+        u32     res_l0;
         u8      dev_idx;
         u8      perm;
         u8      res_b1;
