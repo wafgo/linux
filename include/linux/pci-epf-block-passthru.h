@@ -35,19 +35,20 @@ struct pci_epf_blockpt_reg {
 	u32	magic;
 	u32	command;
 	u32	status;
-        u32     queue_size;  /* number of struct pci_epf_blockpt_descr */
+        u32     queue_bar_offset;  
         u32     drv_offset;
         u32     dev_offset;
         u32	num_desc;
         u32     max_devs;
-        u32     start_irq;
-        u32     irqs_per_device;
-        u32     res_l0;
+        u32     irq;
+        u32     qsize;
+        u32     num_queues;
+        u32     queue_offset;
+        u32     available_qsize;
         u8      dev_idx;
         u8      perm;
-        u8      res_b1;
-        u8      res_b2;
-        u64	queue_addr;  /* start of struct pci_epf_blockpt_descr*/
+        u8      qidx;
+        u8      bres0;
         u64     num_sectors;
         char    dev_name[64 * MAX_BLOCK_DEVS + 1];
 } __packed;
