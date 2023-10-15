@@ -26,12 +26,16 @@ config PCI_EPF_NTB
 
 	  If in doubt, say "N" to disable Endpoint NTB driver.
 
-config PCI_EPF_BLOCK_PASSTHRU
-	tristate "PCI Endpoint Passthru driver"
+config PCI_EPF_BLOCK_PASSTHROUGH
+	tristate "PCI Endpoint Passthrough driver"
 	depends on PCI_ENDPOINT
+	select CONFIGFS_FS
 	help
 	  Select this configuration option to enable the Block Device Passthrough functionality.
 	  This driver can pass through any Block device available on the Host on which this driver is loaded.
-	  The decision which device is provided as a PCI Endpoint function is currently hardcoded into the module
+	  The decision which device is provided as a PCI Endpoint function has to be configured through CONFIG_FS.
+	  On the Host (RC) side the CONFIG_PCI_REMOTE_DISK must be set, which will the PCI Driver for this EPF driver
+	  For Details refer to Documentation/PCI/endpoint/pci-endpoint-block-passthru-function.rst. For the configuration
+	  on EP and RC side refer to Documentation/PCI/endpoint/pci-endpoint-block-passthru-howto.rst
 
-	  If in doubt, say "N" to disable Endpoint Block Passhthru driver.
+	  If in doubt, say "N" to disable Endpoint Block Passhthrough driver.

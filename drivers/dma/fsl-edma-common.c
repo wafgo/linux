@@ -536,6 +536,31 @@ struct dma_async_tx_descriptor *fsl_edma_prep_dma_cyclic(
 }
 EXPORT_SYMBOL_GPL(fsl_edma_prep_dma_cyclic);
 
+struct dma_async_tx_descriptor *fsl_edma_prep_memcpy(
+		struct dma_chan *chan, dma_addr_t dst, dma_addr_t src,
+		size_t len, unsigned long flags)
+{
+    struct fsl_edma_desc *fsl_desc;
+    struct fsl_edma_chan *fsl_chan = to_fsl_edma_chan(chan);
+    struct device *dev = &chan->dev->device;
+
+    dev_info(dev, "%s called\n", __FUNCTION__);
+    fsl_desc = fsl_edma_alloc_desc(fsl_chan, 1);
+    if (!fsl_desc)
+	return NULL;
+
+    dev_info(dev, "%s descriptor allocated\n", __FUNCTION__);
+    fsl_desc->iscyclic = false;
+    fsl_desc->dirn = DMA_MEM_TO_MEM;
+
+    fsl_chan->attr = fsl_edma_get_tcd_attr(DMA_SLAVE_BUSWIDTH_8_BYTES);
+    fsl_edma_fill_tcd(fsl_desc->tcd[0].vtcd, src, dst, fsl_chan->attr, 0,
+					  len, 0, 1, 1, 0, 0,
+					  false, false, false);
+    
+    return vchan_tx_prep(&fsl_chan->vchan, &fsl_desc->vdesc, flags);
+}
+
 struct dma_async_tx_descriptor *fsl_edma_prep_slave_sg(
 		struct dma_chan *chan, struct scatterlist *sgl,
 		unsigned int sg_len, enum dma_transfer_direction direction,

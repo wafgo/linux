@@ -35,6 +35,7 @@
  *
  */
 
+/* #define DEBUG 1 */
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
 #include <linux/io.h>
@@ -78,8 +79,8 @@ struct pci_epf_blockpt_queue {
 	u32 drv_idx;
 	u32 dev_idx;
 	u32 num_desc;
-	struct task_struct *digest_thr;
-	struct task_struct *produce_thr;
+	struct task_struct *complete_thr;
+	struct task_struct *submit_thr;
 	struct list_head proc_list;
 	spinlock_t proc_lock;
 	int irq;
@@ -146,10 +147,10 @@ struct pci_epf_blockpt_info {
 };
 
 #define blockpt_retry_delay() usleep_range(100, 500)
-#define blockpt_poll_delay() usleep_range(200, 500)
+#define blockpt_poll_delay() usleep_range(500, 1000)
 
-static int pci_blockpt_digest_descriptor_kthread(void *);
-static int pci_blockpt_bio_submit_kthread(void *);
+static int pci_blockpt_rq_completer(void *);
+static int pci_blockpt_rq_submitter(void *);
 
 static void
 pci_epf_blockpt_set_invalid_id_error(struct pci_blockpt_device_common *dcommon,
@@ -246,14 +247,14 @@ alloc_pci_epf_blockpt_info(struct pci_epf_blockpt_queue *queue, size_t size,
 
 	binfo = devm_kzalloc(dev, sizeof(*binfo), alloc_flags);
 	if (unlikely(!binfo)) {
-		dev_err(dev, "Could not allocate BIO INFO\n");
+		dev_err(dev, "Could not allocate bio info\n");
 		return NULL;
 	}
 
 	INIT_LIST_HEAD(&binfo->node);
 	bio = bio_alloc(alloc_flags, 1);
 	if (unlikely(!bio)) {
-		dev_err(dev, "Could not allocate BIO\n");
+		dev_err(dev, "Could not allocate bio\n");
 		goto free_binfo;
 	}
 
@@ -261,7 +262,7 @@ alloc_pci_epf_blockpt_info(struct pci_epf_blockpt_queue *queue, size_t size,
 	binfo->page_order = get_order(size);
 	page = alloc_pages(alloc_flags | GFP_DMA, binfo->page_order);
 	if (unlikely(!page)) {
-		dev_err(dev, "Could not allocate %i page(s) for BIO\n",
+		dev_err(dev, "Could not allocate %i page(s) for bio\n",
 			1 << binfo->page_order);
 		goto put_bio;
 	}
@@ -326,14 +327,14 @@ static void destroy_all_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
 	for_each_present_cpu (cpu) {
 		struct pci_epf_blockpt_queue *queue =
 			per_cpu_ptr(bpt_dev->q, cpu);
-		if (queue->produce_thr) {
+		if (queue->submit_thr) {
 			up(&queue->proc_sem);
-			queue->produce_thr = NULL;
+			queue->submit_thr = NULL;
 		}
 
-		if (queue->digest_thr) {
-			kthread_stop(queue->digest_thr);
-			queue->digest_thr = NULL;
+		if (queue->complete_thr) {
+			kthread_stop(queue->complete_thr);
+			queue->complete_thr = NULL;
 		}
 	}
 }
@@ -349,21 +350,21 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
 			per_cpu_ptr(bpt_dev->q, cpu);
 		if (cpu >= bpt_dev->max_queue)
 			break;
-		snprintf(tname, sizeof(tname), "%s-d/q%d", bpt_dev->dev_name,
+		snprintf(tname, sizeof(tname), "%s-q%d:complete-rq", bpt_dev->dev_name,
 			 cpu);
 		dev_dbg(dev, "creating thread %s\n", tname);
-		queue->digest_thr = kthread_create_on_cpu(
-			pci_blockpt_digest_descriptor_kthread, queue, cpu,
+		queue->complete_thr = kthread_create_on_cpu(
+			pci_blockpt_rq_completer, queue, cpu,
 			tname);
-		if (IS_ERR(queue->digest_thr)) {
-			ret = PTR_ERR(queue->digest_thr);
+		if (IS_ERR(queue->complete_thr)) {
+			ret = PTR_ERR(queue->complete_thr);
 			dev_err(dev,
 				"%s Could not create digest kernel thread: %i\n",
 				bpt_dev->device_path, ret);
 			goto check_start_errors;
 		}
 		/* we can wake up the kthread here, because it will wait for its percpu samaphore  */
-		wake_up_process(queue->digest_thr);
+		wake_up_process(queue->complete_thr);
 	}
 
 	for_each_present_cpu (cpu) {
@@ -371,19 +372,19 @@ static int start_bpt_worker_threads(struct pci_epf_blockpt_device *bpt_dev)
 			per_cpu_ptr(bpt_dev->q, cpu);
 		if (cpu >= bpt_dev->max_queue)
 			break;
-		snprintf(tname, sizeof(tname), "%s-s/q%d", bpt_dev->dev_name,
+		snprintf(tname, sizeof(tname), "%s-q%d:submit-rq", bpt_dev->dev_name,
 			 cpu);
 		dev_dbg(dev, "creating thread %s\n", tname);
-		queue->produce_thr = kthread_create_on_cpu(
-			pci_blockpt_bio_submit_kthread, queue, cpu, tname);
-		if (IS_ERR(queue->produce_thr)) {
-			ret = PTR_ERR(queue->produce_thr);
+		queue->submit_thr = kthread_create_on_cpu(
+			pci_blockpt_rq_submitter, queue, cpu, tname);
+		if (IS_ERR(queue->submit_thr)) {
+			ret = PTR_ERR(queue->submit_thr);
 			dev_err(dev,
 				"%s Could not create bio submit kernel thread: %i\n",
 				bpt_dev->device_path, ret);
 			goto check_start_errors;
 		}
-		wake_up_process(queue->produce_thr);
+		wake_up_process(queue->submit_thr);
 	}
 
 #ifdef USE_DMAENGINE
@@ -811,7 +812,7 @@ static void pci_epf_blockpt_dma_callback(void *param)
 }
 #endif
 
-static int pci_blockpt_bio_submit_kthread(void *__bpt_queue)
+static int pci_blockpt_rq_submitter(void *__bpt_queue)
 {
 	struct pci_epf_blockpt_queue *queue = __bpt_queue;
 	struct device *dev = &queue->bpt_dev->dcommon->epf->dev;
@@ -857,7 +858,7 @@ static int pci_blockpt_bio_submit_kthread(void *__bpt_queue)
 						       loc_descr.len);
 				if (ret) {
 					/* This is not an error. Some PCI Controllers have very few translation windows, and as we run this on all available cores
-					 * it is not unusual that the translation windows are all used for a short period of time. Instead of giving up and panic here, just wait an retry. It will usually
+					 * it is not unusual that the translation windows are all used for a short period of time. Instead of giving up and panic here, just wait and retry. It will usually
 					 * be available on the next few retries */
 					dev_info(dev,
 						"Mapping descriptor failed with %i. Retry\n",
@@ -970,7 +971,7 @@ err_retry:
 	return 0;
 }
 
-static int pci_blockpt_digest_descriptor_kthread(void *__queue)
+static int pci_blockpt_rq_completer(void *__queue)
 {
 	struct pci_epf_blockpt_queue *queue = __queue;
 	struct device *dev = &queue->bpt_dev->dcommon->epf->dev;
@@ -1081,20 +1082,21 @@ static int pci_blockpt_digest_descriptor_kthread(void *__queue)
 		       &queue->device_ring->ring[queue->dev_idx]);
 		queue->dev_idx = (queue->dev_idx + 1) % queue->num_desc;
 		writew(queue->dev_idx, &queue->device_ring->idx);
-	retry_irq:
-		ret = pci_epc_raise_irq(epf->epc, epf->func_no, epf->vfunc_no,
-					PCI_EPC_IRQ_MSIX, queue->irq);
-		if (ret < 0) {
-			dev_err_ratelimited(dev, "could not send msix irq%d\n",
-					    queue->irq);
-			blockpt_retry_delay();
-			goto retry_irq;
-		}
+		do {
+			ret = pci_epc_raise_irq(epf->epc, epf->func_no,
+						epf->vfunc_no, PCI_EPC_IRQ_MSIX,
+						queue->irq);
+			if (ret < 0) {
+			    dev_err_ratelimited(dev, "could not send msix irq%d\n",
+						queue->irq);
+			    blockpt_retry_delay();
+			}
+		} while(ret != 0);
 
 		atomic_inc(&queue->raised_irqs);
 		free_pci_blockpt_info(bi);
 		continue;
-	err_retry:
+err_retry:
 		pci_epc_unmap_addr(epf->epc, epf->func_no, epf->vfunc_no,
 				   bi->phys_addr);
 		blockpt_retry_delay();

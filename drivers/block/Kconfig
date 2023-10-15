@@ -431,14 +431,18 @@ config BLK_DEV_RBD
 
 	  If unsure, say N.
 
-config PCI_REMOTE_BLK_DEV
-	tristate "PCI Remote Block Device"
-	depends on INET && BLOCK && PCI
+config PCI_REMOTE_DISK
+	tristate "PCI Remote Disk"
+	depends on BLOCK && PCI
+	select CONFIGFS_FS
 	help
-	  Say Y here if you want include the PCI remote block device, which allows you to map the blockdevices
-	  from an remote PCI Endpoint driver as local block devices. This can be useful if you
+	  Say Y here if you want include the PCI remote disk, which allows you to map the blockdevices
+	  from a remote PCI Endpoint driver as local block devices. This can be useful if you
 	  have multiple SoCs in your system where the block devices are connected to one SoC and you want to access
-	  those from the other SoC.
+	  those from the other SoC. The decision to which remote disk you want to attach is done through CONFIG_FS.
+	  This option is the complement to the CONFIG_PCI_EPF_BLOCK_PASSTHROUGH options which must
+	  be set on the Endpoint device which exposes its Block Devices.
+	  For Details refer to Documentation/PCI/endpoint/pci-endpoint-block-passthru-function.rst
 
 	  If unsure, say N.
 

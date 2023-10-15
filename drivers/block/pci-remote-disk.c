@@ -6,6 +6,7 @@
  * Wadim Mueller <wadim.mueller@continental.com>
  */
 
+/* #define DEBUG 1 */
 #include <linux/major.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -62,6 +63,7 @@
 * +------------------------+
 */
 
+
 #define QSIZE                                                                  \
 	(ALIGN(NUM_DESRIPTORS * sizeof(struct pci_epf_blockpt_descr),          \
 	       sizeof(u64)) +                                                  \
@@ -75,6 +77,11 @@
 #define RD_STATUS_TIMEOUT_COUNT (100)
 
 #define DRV_MODULE_NAME "pci-remote-disk"
+
+#define blockpt_readb(_x) readb(&_x)
+#define blockpt_readw(_x) cpu_to_le16(readw(&_x))
+#define blockpt_readl(_x) cpu_to_le32(readl(&_x))
+#define blockpt_readq(_x) cpu_to_le64(readq(&_x))
 
 struct pci_remote_disk_common;
 struct pci_remote_disk_device;
@@ -125,6 +132,7 @@ struct pci_remote_disk_common {
 	struct pci_dev *pdev;
 	struct pci_epf_blockpt_reg __iomem *base;
 	void __iomem *qbase;
+        void __iomem *qbase_next;
 	void __iomem *bar[PCI_STD_NUM_BARS];
 	int num_irqs;
 	u32 num_queues;
@@ -280,9 +288,9 @@ static int pci_remote_disk_attach(struct pci_remote_disk_device *rdd)
 
 		queue->descr_size = QSIZE;
 		queue->descr_ring = (struct pci_epf_blockpt_descr
-					     *)((u64)rdd->rcom->qbase +
-						(u64)(i * queue->descr_size));
-		queue->qbar_offset = (i * queue->descr_size);
+					     *)((u64)rdd->rcom->qbase_next + (u64)(queue->descr_size));
+		rdd->rcom->qbase_next = (void __iomem *)queue->descr_ring;
+		queue->qbar_offset = ((u64)rdd->rcom->qbase_next - (u64)rdd->rcom->qbase);
 		memset_io(queue->descr_ring, 0, queue->descr_size);
 		queue->drv_offset =
 			ALIGN(NUM_DESRIPTORS * sizeof(*queue->descr_ring),
@@ -364,6 +372,7 @@ static int pci_remote_disk_attach(struct pci_remote_disk_device *rdd)
 	rdd->tag_set.numa_node = NUMA_NO_NODE;
 	rdd->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 	rdd->tag_set.nr_hw_queues = num_present_cpus();
+	rdd->tag_set.timeout = 5 * HZ;
 	rdd->tag_set.cmd_size = sizeof(struct pci_remote_disk_request);
 	rdd->tag_set.driver_data = rdd;
 	ret = blk_mq_alloc_tag_set(&rdd->tag_set);
@@ -419,15 +428,17 @@ static int pci_remote_disk_detach(struct pci_remote_disk_device *rdd)
 
 	for (i = 0; i < rdd->num_queues; ++i) {
 		struct pci_remote_disk_queue *queue = &rdd->queue[i];
-		up(&queue->dig_sem);
+		kthread_stop(queue->digest_task);
 	}
 
 	del_gendisk(rdd->gd);
 	blk_mq_free_tag_set(&rdd->tag_set);
 	for (i = 0; i < rdd->num_queues; ++i) {
 		struct pci_remote_disk_queue *queue = &rdd->queue[i];
-		devm_free_irq(dev, queue->irq, rdd);
-		queue->irq = -EINVAL;
+		if (queue->irq != -EINVAL) {
+			devm_free_irq(dev, queue->irq, queue);
+			queue->irq = -EINVAL;
+		}
 	}
 
 	put_disk(rdd->gd);
@@ -542,8 +553,8 @@ static blk_status_t pci_rd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	dma_addr_t dma_addr;
 	char *buf;
 	int err;
-	/* this seems to be a method which works surprisingly well to
-	 * distribute the load across the available queues*/
+	/* this method works well to
+	 * distribute the load across the available queues */
 	struct pci_remote_disk_queue *queue =
 		&rdd->queue[smp_processor_id() % rdd->num_queues];
 
@@ -618,8 +629,8 @@ static enum blk_eh_timer_return pci_rd_timeout_rq(struct request *rq, bool res)
 {
 	struct pci_remote_disk_request *rb_req = blk_mq_rq_to_pdu(rq);
 	struct device *dev = &rb_req->queue->rdd->rcom->pdev->dev;
-	dev_err(dev, "%s : Timeout waiting for request descriptor: %i\n",
-		__FUNCTION__, rb_req->descr_idx);
+	dev_err(dev, "%s : Timeout on queue%d: Descriptor %d\n",
+		rb_req->queue->rdd->l_name, rb_req->queue->idx, rb_req->descr_idx);
 	return BLK_EH_DONE;
 }
 
@@ -687,63 +698,64 @@ static void pci_rd_clear_descriptor(struct pci_remote_disk_queue *queue,
 
 static int pci_remote_disk_dispatch(void *cookie)
 {
-	struct pci_remote_disk_queue *queue = cookie;
-	struct device *dev = &queue->rdd->rcom->pdev->dev;
-	struct pci_blockpt_device_ring __iomem *dev_ring = queue->dev_ring;
-	struct req_iterator iter;
-	struct bio_vec bv;
-	u16 descr_idx;
-	struct pci_epf_blockpt_descr *desc;
-	struct pci_remote_disk_request *rb_req;
-	struct request *rq;
-	void *buf;
+    struct pci_remote_disk_queue *queue = cookie;
+    struct device *dev = &queue->rdd->rcom->pdev->dev;
+    struct pci_blockpt_device_ring __iomem *dev_ring = queue->dev_ring;
+    struct req_iterator iter;
+    struct bio_vec bv;
+    int ret;
+    u16 descr_idx;
+    struct pci_epf_blockpt_descr *desc;
+    struct pci_remote_disk_request *rb_req;
+    struct request *rq;
+    void *buf;
+    unsigned long tmo = msecs_to_jiffies(100);
 
-	while (!kthread_should_stop()) {
-		down(&queue->dig_sem);
+    while (!kthread_should_stop()) {
+	ret = down_timeout(&queue->dig_sem, tmo);
 
-		if (readw(&dev_ring->idx) == queue->dev_idx) {
-			dev_info(dev, "%s.%d stopped\n", queue->rdd->l_name,
-				 queue->idx);
-			return 0;
+	if (readw(&dev_ring->idx) == queue->dev_idx)
+	    continue;
+
+	while(readw(&dev_ring->idx) != queue->dev_idx) {
+	    descr_idx = readw(&dev_ring->ring[queue->dev_idx]);
+	    desc = &queue->descr_ring[descr_idx];
+
+	    BUG_ON(!(READ_ONCE(desc->si.flags) & PBI_EPF_BLOCKPT_F_USED));
+
+	    rb_req = (struct pci_remote_disk_request *)
+		queue->descr_tags[descr_idx];
+	    BUG_ON(rb_req == NULL);
+
+	    rq = blk_mq_rq_from_pdu(rb_req);
+
+	    dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n",
+		    desc->s_sector, desc->len);
+	    if (rq_data_dir(rq) == READ) {
+		buf = kmap(rb_req->pg);
+		rq_for_each_segment (bv, rq, iter) {
+		    memcpy_to_bvec(&bv, buf);
+		    dev_dbg(dev,
+			    " bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX\n",
+			    bv.bv_len, bv.bv_offset,
+			    page_address(bv.bv_page), buf);
+		    buf += bv.bv_len;
 		}
+		kunmap(rb_req->pg);
+	    }
 
-		descr_idx = readw(&dev_ring->ring[queue->dev_idx]);
-		desc = &queue->descr_ring[descr_idx];
+	    dma_unmap_single(dev, desc->addr, desc->len, rq_dma_dir(rq));
+	    rb_req->status = (blk_status_t)readb(&desc->si.status);
 
-		BUG_ON(!(READ_ONCE(desc->si.flags) & PBI_EPF_BLOCKPT_F_USED));
-
-		rb_req = (struct pci_remote_disk_request *)
-				 queue->descr_tags[descr_idx];
-		BUG_ON(rb_req == NULL);
-
-		rq = blk_mq_rq_from_pdu(rb_req);
-
-		dev_dbg(dev, "Digest Req: sec: 0x%llX, len: 0x%x\n",
-			desc->s_sector, desc->len);
-		if (rq_data_dir(rq) == READ) {
-			buf = kmap(rb_req->pg);
-			rq_for_each_segment (bv, rq, iter) {
-				memcpy_to_bvec(&bv, buf);
-				dev_dbg(dev,
-					" bv.len = 0x%x, bv.offset = 0x%x, page: 0x%llX. Buf: 0x%llX\n",
-					bv.bv_len, bv.bv_offset,
-					page_address(bv.bv_page), buf);
-				buf += bv.bv_len;
-			}
-			kunmap(rb_req->pg);
-		}
-
-		dma_unmap_single(dev, desc->addr, desc->len, rq_dma_dir(rq));
-		rb_req->status = (blk_status_t)readb(&desc->si.status);
-
-		pci_rd_clear_descriptor(queue, desc, descr_idx);
-		__free_pages(rb_req->pg, rb_req->order);
-		WRITE_ONCE(queue->dev_idx,
-			   (queue->dev_idx + 1) % NUM_DESRIPTORS);
-		blk_mq_complete_request(rq);
+	    pci_rd_clear_descriptor(queue, desc, descr_idx);
+	    __free_pages(rb_req->pg, rb_req->order);
+	    WRITE_ONCE(queue->dev_idx,
+		       (queue->dev_idx + 1) % NUM_DESRIPTORS);
+	    blk_mq_complete_request(rq);
 	}
+    }
 
-	return 0;
+    return 0;
 }
 
 static int pci_remote_disk_parse(struct pci_remote_disk_common *rcom)
@@ -924,7 +936,7 @@ static int pci_remote_disk_probe(struct pci_dev *pdev,
 		goto err_iounmap;
 	}
 
-	rcom->qbase =
+	rcom->qbase = rcom->qbase_next = 
 		(void *)(u64)rcom->base + readl(&rcom->base->queue_bar_offset);
 	rcom->qsize = readl(&rcom->base->available_qsize);
 	rcom->num_queues = readb(&rcom->base->num_queues);
@@ -1000,8 +1012,6 @@ static void pci_remote_disk_remove(struct pci_dev *pdev)
 			struct pci_remote_disk_queue *queue = &rdd->queue[i];
 			if (queue->descr_tags)
 				kfree(queue->descr_tags);
-			if (queue && queue->irq != -EINVAL)
-				devm_free_irq(dev, queue->irq, rdd);
 		}
 		kfree(rdd->queue);
 		list_del(&rdd->node);
