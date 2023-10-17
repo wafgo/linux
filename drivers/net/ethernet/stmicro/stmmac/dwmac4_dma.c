@@ -6,7 +6,7 @@
  * This contains the functions to handle the dma.
  *
  * Copyright (C) 2015  STMicroelectronics Ltd
- * Copyright 2021 NXP
+ * Copyright 2021, 2023 NXP
  *
  * Author: Alexandre Torgue <alexandre.torgue@st.com>
  */
@@ -67,52 +67,6 @@ static void dwmac4_dma_axi(void __iomem *ioaddr, struct stmmac_axi *axi)
 	}
 
 	writel(value, ioaddr + DMA_SYS_BUS_MODE);
-}
-
-static void dwmac5_dma_axi(void __iomem *ioaddr, struct stmmac_axi *axi)
-{
-	u32 value;
-
-	value = DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			     DMA_AXI_WBACK_RWALLOCATE,
-			     DMA_ACE_TX_DESCRIPTOR_R);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_TX_EXT_BUFF_TSO_R);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_TX_FIRST_BUFF_TSO_R);
-
-	writel(value, ioaddr + DMA_AXI4_TX_AR_ACE_CONTROL);
-
-	value = DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			     DMA_AXI_WBACK_RWALLOCATE,
-			     DMA_ACE_RX_DESCRIPTOR_W);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_RX_PAYLOAD_W);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_RX_DMA_HEADER_W);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_RX_BUFFER_W);
-
-	writel(value, ioaddr + DMA_AXI4_RX_AW_ACE_CONTROL);
-
-	value = DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			     DMA_AXI_WBACK_RWALLOCATE,
-			     DMA_ACE_TXRX_DESCRIPTOR_W);
-	value |= DMA_AXI_AWAR(DMA_AXI_OUTER_SHARABLE,
-			      DMA_AXI_WBACK_RWALLOCATE,
-			      DMA_ACE_TXRX_DESCRIPTOR_R);
-
-	value |= DMA_AXI_AWAR_PROT(DMA_AXI_NON_SECURE_ACCESS,
-				   DMA_ACE_TXRX_DMA_ARPROT);
-	value |= DMA_AXI_AWAR_PROT(DMA_AXI_NON_SECURE_ACCESS,
-				   DMA_ACE_TXRX_DMA_AWPROT);
-
-	writel(value, ioaddr + DMA_AXI4_TXRX_AWAR_ACE_CONTROL);
 }
 
 static void dwmac4_dma_init_rx_chan(void __iomem *ioaddr,
@@ -592,6 +546,15 @@ static int dwmac4_enable_tbs(void __iomem *ioaddr, bool en, u32 chan)
 	return 0;
 }
 
+static void dwmac4_axi4_cc(void __iomem *ioaddr,
+			   struct stmmac_axi4_ace_ctrl *acecfg)
+{
+	/* Configure AXI4 cache coherency for Tx/Rx DMA channels */
+	writel(acecfg->tx_ar_reg, ioaddr + DMA_AXI4_TX_AR_ACE_CONTROL);
+	writel(acecfg->rx_aw_reg, ioaddr + DMA_AXI4_RX_AW_ACE_CONTROL);
+	writel(acecfg->txrx_awar_reg, ioaddr + DMA_AXI4_TXRX_AWAR_ACE_CONTROL);
+}
+
 const struct stmmac_dma_ops dwmac4_dma_ops = {
 	.reset = dwmac4_dma_reset,
 	.init = dwmac4_dma_init,
@@ -657,7 +620,7 @@ const struct stmmac_dma_ops dwmac410_s32cc_dma_ops = {
 	.init_chan = dwmac4_dma_init_channel,
 	.init_rx_chan = dwmac4_dma_init_rx_chan,
 	.init_tx_chan = dwmac4_dma_init_tx_chan,
-	.axi = dwmac5_dma_axi,
+	.axi = dwmac4_dma_axi,
 	.dump_regs = dwmac4_dump_dma_regs,
 	.dma_rx_mode = dwmac4_dma_rx_chan_op_mode,
 	.dma_tx_mode = dwmac4_dma_tx_chan_op_mode,
@@ -677,5 +640,6 @@ const struct stmmac_dma_ops dwmac410_s32cc_dma_ops = {
 	.enable_tso = dwmac4_enable_tso,
 	.qmode = dwmac4_qmode,
 	.set_bfsize = dwmac4_set_bfsize,
+	.axi4_cc = dwmac4_axi4_cc,
 };
 

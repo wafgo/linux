@@ -118,6 +118,12 @@ struct stmmac_axi {
 	bool axi_rb;
 };
 
+struct stmmac_axi4_ace_ctrl {
+	u32 tx_ar_reg;
+	u32 rx_aw_reg;
+	u32 txrx_awar_reg;
+};
+
 #define EST_GCL		1024
 struct stmmac_est {
 	struct mutex lock;
@@ -250,12 +256,14 @@ struct plat_stmmacenet_data {
 	struct reset_control *stmmac_rst;
 	struct reset_control *stmmac_ahb_rst;
 	struct stmmac_axi *axi;
+	struct stmmac_axi4_ace_ctrl *axi4_ace_ctrl;
 	int has_gmac4;
 	bool has_sun8i;
 	bool tso_en;
 	int rss_en;
 	int mac_port_sel_speed;
 	bool en_tx_lpi_clockgating;
+	bool rx_clk_runs_in_lpi;
 	int has_xgmac;
 	bool vlan_fail_q_en;
 	u8 vlan_fail_q;
@@ -264,6 +272,7 @@ struct plat_stmmacenet_data {
 	bool has_crossts;
 	int int_snapshot_num;
 	int ext_snapshot_num;
+	bool int_snapshot_en;
 	bool ext_snapshot_en;
 	bool multi_msi_en;
 	int msi_mac_vec;
@@ -276,5 +285,6 @@ struct plat_stmmacenet_data {
 	bool use_phy_wol;
 	bool sph_disable;
 	u32 quirk_mask_id;
+	bool ext_sys_time;
 };
 #endif

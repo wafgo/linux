@@ -2,7 +2,7 @@
 /*
  * PCIe host controller driver for NXP S32CC SoCs
  *
- * Copyright 2019-2022 NXP
+ * Copyright 2019-2023 NXP
  */
 
 #ifdef CONFIG_PCI_S32CC_DEBUG
@@ -218,7 +218,6 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 			    complete(wcmp);
 		    }
 #endif
-		}
 
 		/* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
 		/* 	s32cc_pp->uinfo.send_signal_to_user(&s32cc_pp->uinfo); */
@@ -241,6 +240,13 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 			else if (rcmp)
 			    complete(rcmp);
 
+		dma_error = dw_handle_dma_irq_read(di, val_read);
+		if (dma_error != DMA_ERR_NONE)
+			dev_info(s32cc_pp->pcie.dev, "dma read error 0x%0x.\n",
+					dma_error);
+#ifdef CONFIG_PCI_EPF_TEST
+		else if (di->complete)
+			complete(di->complete);
 #endif
 		    }
 		    /* if (signal && s32cc_pp->uinfo.send_signal_to_user) */
@@ -1272,9 +1278,6 @@ static int s32cc_pcie_dt_init(struct platform_device *pdev,
 		return PTR_ERR(s32cc_pp->dma.dma_base);
 	dev_dbg(dev, "dma virt: 0x" PTR_FMT "\n", s32cc_pp->dma.dma_base);
 	s32cc_pp->dma.iatu_unroll_enabled = dw_pcie_iatu_unroll_enabled(pcie);
-	spin_lock_init(&s32cc_pp->dma.rch_lock);
-	spin_lock_init(&s32cc_pp->dma.wch_lock);
-	s32cc_pp->dma.next_free_rd_ch = s32cc_pp->dma.next_free_wr_ch = 0;
 #if defined(CONFIG_PCI_S32CC_DEBUG_WRITES)
 	s32cc_pp->dma.write_dma = s32cc_pcie_write_dma;
 #endif
@@ -1332,10 +1335,10 @@ static int s32cc_pcie_dt_init(struct platform_device *pdev,
 
 	ret = of_property_read_u32(np, "pcie_device_id", &pcie_variant_bits);
 	if (ret) {
-		ret = s32cc_siul2_nvmem_get_pcie_dev_id(dev, "pcie_variant",
-							&pcie_variant_bits);
+		ret = s32cc_nvmem_get_pcie_dev_id(dev, &pcie_variant_bits);
 		if (ret) {
-			dev_info(dev, "Error reading SIUL2 Device ID\n");
+			if (ret != -EPROBE_DEFER)
+				dev_info(dev, "Error reading PCIe Device ID from NVMEM\n");
 			return ret;
 		}
 	}
@@ -1754,12 +1757,8 @@ static int s32cc_pcie_config_common(struct s32cc_pcie *s32cc_pp,
 	struct pcie_port *pp = &pcie->pp;
 	int ret = 0;
 
-	dev_dbg(dev, "%s\n", __func__);
-
 #ifdef CONFIG_PCI_S32CC_EP_MSI
-	struct dw_pcie *pcie = &s32cc_pp->pcie;
 	u32 val, ctrl, num_ctrls;
-	struct pcie_port *pp = &pcie->pp;
 #endif
 
 	/* MSI configuration, for both RC and EP */
@@ -1795,13 +1794,13 @@ static int s32cc_pcie_config_common(struct s32cc_pcie *s32cc_pp,
 
 		num_ctrls = pp->num_vectors / MAX_MSI_IRQS_PER_CTRL;
 
-		/* Initialize IRQ Status array */
+		/* Initialize IRQ Mask array */
 		for (ctrl = 0; ctrl < num_ctrls; ctrl++) {
+			pcie->pp.irq_mask[ctrl] = ~0;
 			dw_pcie_writel_dbi(pcie, PCIE_MSI_INTR0_MASK +
-					(ctrl * MSI_REG_CTRL_BLOCK_SIZE), ~0);
+					(ctrl * MSI_REG_CTRL_BLOCK_SIZE), pcie->pp.irq_mask[ctrl]);
 			dw_pcie_writel_dbi(pcie, PCIE_MSI_INTR0_ENABLE +
 					(ctrl * MSI_REG_CTRL_BLOCK_SIZE), ~0);
-			pcie->pp.irq_status[ctrl] = 0;
 		}
 
 		/* Setup interrupt pins */
@@ -1936,8 +1935,7 @@ static int s32cc_pcie_suspend(struct device *dev)
 	struct s32cc_pcie *s32cc_pp = dev_get_drvdata(dev);
 	struct dw_pcie *pcie = &s32cc_pp->pcie;
 	struct pcie_port *pp = &pcie->pp;
-	struct pci_bus *bus = pp->bridge->bus;
-	struct pci_bus *root_bus;
+	struct pci_bus *bus, *root_bus;
 
 	dev_dbg(pcie->dev, "%s\n", __func__);
 
@@ -1953,12 +1951,13 @@ static int s32cc_pcie_suspend(struct device *dev)
 
 		s32cc_pcie_downstream_dev_to_D0(s32cc_pp);
 
+		bus = pp->bridge->bus;
 		root_bus = s32cc_get_child_downstream_bus(bus);
 		if (!IS_ERR(root_bus))
 			pci_walk_bus(root_bus, pci_dev_set_disconnected, NULL);
 
-		pci_stop_root_bus(pp->bridge->bus);
-		pci_remove_root_bus(pp->bridge->bus);
+		pci_stop_root_bus(bus);
+		pci_remove_root_bus(bus);
 	}
 
 	s32cc_pcie_pme_turnoff(s32cc_pp);

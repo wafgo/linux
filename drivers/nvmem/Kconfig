@@ -203,6 +203,17 @@ config UNIPHIER_EFUSE
 	  This driver can also be built as a module. If so, the module
 	  will be called nvmem-uniphier-efuse.
 
+config NVMEM_S32CC_OCOTP
+	bool "S32CC SoC OCOTP support"
+	depends on SOC_S32CC
+	default y
+	help
+	  This is a driver for the 'OCOTP' peripheral available on S32CC
+	  platforms.
+
+	  If you say Y here, you will get support for the One Time
+	  Programmable memory pages.
+
 config NVMEM_VF610_OCOTP
 	tristate "VF610 SoC OCOTP support"
 	depends on SOC_VF610 || COMPILE_TEST
@@ -267,6 +278,14 @@ config NVMEM_S32CC_SIUL2
 	  This is a driver to access hardware related data like SoC revision
 	  for S32CC SoC.
 	  The revision information is retrieved from SIUL2 module
+
+config NVMEM_SCMI
+	bool "SCMI NVMEM support"
+	help
+	  This is an NVMEM provider driver used to access hardware related data
+	  from an SCMI Agent through the SCMI NVMEM protocol. The cells that
+	  can be read to gather the information should be defined by the
+	  platform in the corresponding SCMI NVMEM device-tree node.
 
 config NVMEM_ZYNQMP
 	bool "Xilinx ZYNQMP SoC nvmem firmware support"

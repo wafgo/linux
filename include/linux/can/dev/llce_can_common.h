@@ -1,16 +1,21 @@
 /* SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause */
-/* Copyright 2021-2022 NXP */
+/* Copyright 2021-2023 NXP */
 
 #ifndef LLCE_CAN_COMMON_H
 #define LLCE_CAN_COMMON_H
 
+#include <linux/can/dev.h>
 #include <linux/ctype.h>
 #include <linux/device.h>
 #include <linux/mailbox/nxp-llce/llce_can.h>
+#include <linux/mailbox/nxp-llce/llce_mailbox.h>
 #include <linux/mailbox_client.h>
 #include <linux/mailbox_controller.h>
 #include <linux/netdevice.h>
 #include <uapi/linux/can.h>
+
+#define LLCE_CAN_NETDEV_IF_NAME		"llcecan"
+#define LLCE_LOGGER_NETDEV_IF_NAME	"llcelogger"
 
 struct llce_can_dev {
 	struct can_priv can; /* Must be the first member */
@@ -23,7 +28,7 @@ struct llce_can_dev {
 	u64 *stats;
 	atomic_t rx_processing;
 
-	int id;
+	unsigned int id;
 };
 
 static inline bool is_llce_rx_busy(struct llce_can_dev *dev)
@@ -83,6 +88,13 @@ static inline u32 pack_word1(bool fdf, u8 dlc, bool brs, bool esi)
 	return word1;
 }
 
+static inline struct device *llce_can_chan_dev(struct mbox_chan *conf_chan)
+{
+	struct mbox_client *cl = conf_chan->cl;
+
+	return cl->dev;
+}
+
 struct llce_can_dev *init_llce_can_dev(struct device *dev, size_t priv_size,
 				       const char *basename);
 
@@ -95,4 +107,8 @@ void process_llce_can_error(struct llce_can_dev *llce,
 			    enum llce_can_module module);
 
 int enable_llce_rx_notif(struct llce_can_dev *llce);
+
+int llce_send_config_cmd(struct mbox_chan *conf_chan,
+			 struct llce_config_msg *msg,
+			 struct completion *config_done);
 #endif

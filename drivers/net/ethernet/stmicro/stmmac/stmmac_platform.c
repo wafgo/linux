@@ -558,13 +558,15 @@ stmmac_probe_config_dt(struct platform_device *pdev, u8 *mac)
 	dma_cfg->mixed_burst = of_property_read_bool(np, "snps,mixed-burst");
 
 	plat->force_thresh_dma_mode = of_property_read_bool(np, "snps,force_thresh_dma_mode");
-	if (plat->force_thresh_dma_mode) {
+	if (plat->force_thresh_dma_mode && plat->force_sf_dma_mode) {
 		plat->force_sf_dma_mode = 0;
 		dev_warn(&pdev->dev,
 			 "force_sf_dma_mode is ignored if force_thresh_dma_mode is set.\n");
 	}
 
 	of_property_read_u32(np, "snps,ps-speed", &plat->mac_port_sel_speed);
+
+	plat->ext_sys_time = of_property_read_bool(np, "snps,ext_sys_time");
 
 	plat->axi = stmmac_axi_setup(pdev);
 

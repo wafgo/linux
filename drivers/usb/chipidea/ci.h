@@ -207,6 +207,7 @@ struct hw_bank {
  * @in_lpm: if the core in low power mode
  * @wakeup_int: if wakeup interrupt occur
  * @rev: The revision number for controller
+ * @mutex: protect code from concorrent running when doing role switch
  * @power_lost_work: work item when controller power is lost
  * @power_lost_wq: work queue for controller power is lost
  */
@@ -261,6 +262,7 @@ struct ci_hdrc {
 	bool				in_lpm;
 	bool				wakeup_int;
 	enum ci_revision		rev;
+	struct mutex                    mutex;
 	struct work_struct		power_lost_work;
 	struct workqueue_struct		*power_lost_wq;
 	/* register save area for suspend&resume */

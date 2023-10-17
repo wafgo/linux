@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Copyright 2020-2022 NXP
+/* Copyright 2020-2023 NXP
  *
  * Driver which provides universal timestamp at SoC level for S32CC.
  *
@@ -20,35 +20,51 @@
 #include <linux/of_device.h>
 #include <linux/clk.h>
 
-#define STM_CR				0x00
-#define STM_CNT				0x04
-#define STM_CR_CPS_OFFSET	8
-#define STM_CR_CPS_MASK		0xFF
-#define STM_CR_CPS			(STM_CR_CPS_MASK << STM_CR_CPS_OFFSET)
+#define STM_CR				0x00u
+#define STM_CNT				0x04u
+#define STM_CR_CPS_OFFSET		8u
+#define STM_CR_CPS(X)			((X) << STM_CR_CPS_OFFSET)
 #define STM_CR_FRZ			BIT(1)
 #define STM_CR_TEN			BIT(0)
 #define DRIVER_NAME			"NXP S32CC Univesal Time Source"
-#define INPUT_LEN			2
-#define OUTPUT_LEN			11
+#define INPUT_LEN			2u
+#define OUTPUT_LEN			11u
 
-static void __iomem *timer_base;
-static struct clk *clock;
+enum stm_count_init {
+	COUNT_ON_INIT,
+	NO_COUNT_ON_INIT,
+};
+
+struct stm_driver {
+	enum stm_count_init init;
+	u32 prescaler;
+	void __iomem *base;
+};
 
 static ssize_t get_init(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
+	struct stm_driver *drv = dev_get_drvdata(dev);
 	int initialized;
-	u32	reg_content;
+	u32 reg_content;
 
-	reg_content = readl(timer_base + STM_CR);
+	reg_content = readl(drv->base + STM_CR);
 	initialized = !!(reg_content & STM_CR_TEN);
 
 	return snprintf(buf, INPUT_LEN, "%d\n", initialized);
 }
 
+static void stm_init_counter(struct stm_driver *drv)
+{
+	writel(0, drv->base + STM_CNT);
+	writel(STM_CR_CPS(drv->prescaler - 1) | STM_CR_FRZ | STM_CR_TEN,
+	       drv->base + STM_CR);
+}
+
 static ssize_t set_init(struct device *dev, struct device_attribute *attr,
 			const char *buf, size_t count)
 {
+	struct stm_driver *drv = dev_get_drvdata(dev);
 	int rc;
 	int should_init;
 
@@ -58,11 +74,9 @@ static ssize_t set_init(struct device *dev, struct device_attribute *attr,
 		return count;
 	}
 	if (should_init) {
-		writel(0, timer_base + STM_CNT);
-		writel(STM_CR_CPS | STM_CR_FRZ | STM_CR_TEN,
-		       timer_base + STM_CR);
+		stm_init_counter(drv);
 	} else {
-		writel(0, timer_base + STM_CR);
+		writel(0, drv->base + STM_CR);
 	}
 	return count;
 }
@@ -70,9 +84,10 @@ static ssize_t set_init(struct device *dev, struct device_attribute *attr,
 static ssize_t get_time(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
+	struct stm_driver *drv = dev_get_drvdata(dev);
 	u32 cur_time;
 
-	cur_time = readl(timer_base + STM_CNT);
+	cur_time = readl(drv->base + STM_CNT);
 
 	return snprintf(buf, OUTPUT_LEN, "0x%08x\n", cur_time);
 }
@@ -82,9 +97,10 @@ static const struct device_attribute dev_attrs[] = {
 	__ATTR(value,	0440, get_time,	NULL)
 };
 
-static int init_interface(struct device *dev)
+static int init_sysfs_interface(struct device *dev)
 {
-	int rc, i, j;
+	size_t i, j;
+	int rc;
 
 	for (i = 0; i < ARRAY_SIZE(dev_attrs); i++) {
 		rc = device_create_file(dev, &dev_attrs[i]);
@@ -98,63 +114,109 @@ static int init_interface(struct device *dev)
 	return rc;
 }
 
+static void deinit_sysfs_interface(struct device *dev)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(dev_attrs); i++)
+		device_remove_file(dev, &dev_attrs[i]);
+}
+
+static int devm_clk_prepare_enable(struct device *dev, struct clk *clk)
+{
+	int ret;
+
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		return ret;
+
+	return devm_add_action_or_reset(dev,
+					(void(*)(void *))clk_disable_unprepare,
+					clk);
+}
+
+static const struct of_device_id global_timer_dt_ids[] = {
+	{
+		.compatible = "nxp,s32cc-stm-global",
+		.data = (void *)NO_COUNT_ON_INIT,
+	},
+	{
+		.compatible = "nxp,s32cc-stm-ts",
+		.data = (void *)COUNT_ON_INIT,
+	},
+	{ /* sentinel */ }
+};
+
 static int global_timer_probe(struct platform_device *pdev)
 {
-	struct resource *res;
+	const struct of_device_id *match;
+	struct device *dev = &pdev->dev;
+	const struct device_node *node;
+	struct stm_driver *drv;
+	struct clk *clock;
+	u32 prescaler;
 	int rc;
 
-	clock = devm_clk_get(&pdev->dev, "stm");
+	node = dev->of_node;
+	if (!node)
+		return -EINVAL;
+
+	if (of_property_read_u32(node, "nxp,prescaler", &prescaler))
+		prescaler = 1;
+
+	if (!prescaler || prescaler > 256) {
+		dev_err(dev, "Invalid prescaler value %u\n", prescaler);
+		return -EINVAL;
+	}
+
+	match = of_match_node(global_timer_dt_ids, pdev->dev.of_node);
+	if (!match)
+		return -EINVAL;
+
+	drv = devm_kzalloc(dev, sizeof(*drv), GFP_KERNEL);
+	if (!drv)
+		return -ENOMEM;
+
+	clock = devm_clk_get(dev, "stm");
 	if (IS_ERR(clock)) {
-		dev_err(&pdev->dev, "Failed getting clock from dtb\n");
+		dev_err(dev, "Failed getting clock from dtb\n");
 		return PTR_ERR(clock);
 	}
-	rc = clk_prepare_enable(clock);
+
+	rc = devm_clk_prepare_enable(dev, clock);
 	if (rc) {
-		dev_err(&pdev->dev, "Failed initializing clock\n");
+		dev_err(dev, "Failed initializing clock\n");
 		return rc;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "Failed getting timer address from dtb.\n");
-		clk_disable_unprepare(clock);
-		return -ENODEV;
-	}
-	timer_base = ioremap(res->start, res->end - res->start);
-	if (!timer_base) {
-		dev_err(&pdev->dev, "Couldn't remap timer base address\n");
-		clk_disable_unprepare(clock);
-		return -ENOMEM;
+	drv->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(drv->base)) {
+		dev_err(dev, "Couldn't remap timer base address\n");
+		return PTR_ERR(drv->base);
 	}
 
-	rc = init_interface(&pdev->dev);
+	drv->prescaler = prescaler;
+
+	drv->init = (enum stm_count_init)match->data;
+	if (drv->init == COUNT_ON_INIT)
+		stm_init_counter(drv);
+
+	rc = init_sysfs_interface(dev);
 	if (rc) {
-		dev_err(&pdev->dev, "Failed initiating sysfs interface\n");
-		iounmap(timer_base);
-		clk_disable_unprepare(clock);
+		dev_err(dev, "Failed initiating sysfs interface\n");
 	}
+
+	platform_set_drvdata(pdev, drv);
 
 	return rc;
 }
 
 static int global_timer_remove(struct platform_device *pdev)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(dev_attrs); i++)
-		device_remove_file(&pdev->dev, &dev_attrs[i]);
-	iounmap(timer_base);
-	clk_disable_unprepare(clock);
+	deinit_sysfs_interface(&pdev->dev);
 
 	return 0;
 }
-
-static const struct of_device_id global_timer_dt_ids[] = {
-	{
-		.compatible = "nxp,s32cc-stm-global",
-	},
-	{ /* sentinel */ }
-};
 
 static struct platform_driver global_time_driver = {
 	.probe	= global_timer_probe,
@@ -165,27 +227,7 @@ static struct platform_driver global_time_driver = {
 		.of_match_table = global_timer_dt_ids,
 	},
 };
-
-static int __init global_time_init(void)
-{
-	int ret;
-
-	ret = platform_driver_register(&global_time_driver);
-	if (ret) {
-		pr_err("%s Problem registering global timing drive\n",
-		       DRIVER_NAME);
-	}
-
-	return ret;
-}
-
-static void __exit global_time_exit(void)
-{
-	platform_driver_unregister(&global_time_driver);
-}
-
-module_init(global_time_init);
-module_exit(global_time_exit);
+module_platform_driver(global_time_driver)
 
 MODULE_DESCRIPTION("NXP SoC Level Time Source for S32CC");
 MODULE_LICENSE("GPL v2");

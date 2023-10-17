@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  *
  */
 
@@ -11,9 +11,9 @@
 
 / {
 	aliases {
-		pfe0 = &pfe_netif0;
-		pfe1 = &pfe_netif1;
-		pfe2 = &pfe_netif2;
+		ethernet1 = &pfe_netif0;
+		ethernet2 = &pfe_netif1;
+		ethernet3 = &pfe_netif2;
 	};
 
 	soc {
@@ -28,11 +28,10 @@
 			interrupts = <GIC_SPI 190 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 191 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 192 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 193 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 194 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 196 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 197 IRQ_TYPE_EDGE_RISING>;
-			interrupt-names = "hif0", "hif1", "hif2", "hif3",
+			interrupt-names = "hif0", "hif1", "hif2",
 					  "bmu", "upegpt", "safety";
 			resets = <&reset S32CC_SCMI_RST_PART2>;
 			reset-names = "pfe_part";
@@ -51,11 +50,6 @@
 					      "pfe-shared-pool", "pfe-bdr-pool";
 			nxp,fw-class-name = "s32g_pfe_class.fw";
 			nxp,fw-util-name = "s32g_pfe_util.fw";
-			nvmem-cells = <&soc_revision>;
-			nvmem-cell-names = "soc_revision";
-			nxp,pfeng-hif-channels = <PFE_HIF_CHANNEL_0>,
-						 <PFE_HIF_CHANNEL_1>,
-						 <PFE_HIF_CHANNEL_2>;
 			nxp,pfeng-ihc-channel = <PFE_HIF_CHANNEL_0>;
 			status = "disabled";
 
@@ -91,7 +85,7 @@
 				local-mac-address = [ 00 04 9F BE EF 00 ];
 				nxp,pfeng-if-name = "pfe0";
 				nxp,pfeng-hif-channels = <PFE_HIF_CHANNEL_0>;
-				nxp,pfeng-emac-id = <PFE_EMAC_0>;
+				nxp,pfeng-linked-phyif = <PFE_PHYIF_EMAC_0>;
 				clocks = <&clks S32G_SCMI_CLK_PFE0_TX_SGMII>,
 					 <&clks S32G_SCMI_CLK_PFE0_TX_RGMII>,
 					 <&clks S32G_SCMI_CLK_PFE0_TX_RMII>,
@@ -114,7 +108,7 @@
 				local-mac-address = [ 00 04 9F BE EF 01 ];
 				nxp,pfeng-if-name = "pfe1";
 				nxp,pfeng-hif-channels = <PFE_HIF_CHANNEL_1>;
-				nxp,pfeng-emac-id = <PFE_EMAC_1>;
+				nxp,pfeng-linked-phyif = <PFE_PHYIF_EMAC_1>;
 				clocks = <&clks S32G_SCMI_CLK_PFE1_TX_SGMII>,
 					 <&clks S32G_SCMI_CLK_PFE1_TX_RGMII>,
 					 <&clks S32G_SCMI_CLK_PFE1_TX_RMII>,
@@ -137,7 +131,7 @@
 				local-mac-address = [ 00 04 9F BE EF 02 ];
 				nxp,pfeng-if-name = "pfe2";
 				nxp,pfeng-hif-channels = <PFE_HIF_CHANNEL_2>;
-				nxp,pfeng-emac-id = <PFE_EMAC_2>;
+				nxp,pfeng-linked-phyif = <PFE_PHYIF_EMAC_2>;
 				clocks = <&clks S32G_SCMI_CLK_PFE2_TX_SGMII>,
 					 <&clks S32G_SCMI_CLK_PFE2_TX_RGMII>,
 					 <&clks S32G_SCMI_CLK_PFE2_TX_RMII>,
@@ -163,6 +157,17 @@
 							 <PFE_HIF_CHANNEL_1>,
 							 <PFE_HIF_CHANNEL_2>;
 				nxp,pfeng-netif-mode-aux;
+			};
+
+			/* Network interface 'hif3' */
+			pfe_hif3: ethernet@14 {
+				compatible = "nxp,s32g-pfe-netif";
+				status = "disabled";
+				reg = <14>;
+				local-mac-address = [ 00 04 9F BE EF F0 ];
+				nxp,pfeng-if-name = "hif3";
+				nxp,pfeng-hif-channels = <PFE_HIF_CHANNEL_0>;
+				nxp,pfeng-linked-phyif = <PFE_PHYIF_HIF_3>;
 			};
 		};
 	};

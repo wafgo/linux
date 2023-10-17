@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
-/* Copyright 2020-2022 NXP */
+/* Copyright 2020-2023 NXP */
 #ifndef LLCE_CAN_H
 #define LLCE_CAN_H
 
 #include <linux/types.h>
-#include "llce_fw_version.h"
 #include "llce_fw_interface.h"
+#include "llce_fw_version.h"
 #include "llce_interface_config.h"
 
 /**
@@ -52,7 +52,9 @@
 #define LLCE_CAN_CONTROLLERCONFIG_LPB_EN (0x00200000U)
 /** CAN controller option used to enable self-reception mode. */
 #define LLCE_CAN_CONTROLLERCONFIG_SRX_EN (0x00400000U)
-/** CAN controller option used to enable automatic bus-off recovery. */
+/**
+ * CAN controller option used to enable automatic bus-off recovery.
+ */
 #define LLCE_CAN_CONTROLLERCONFIG_ABR_EN (0x00000001U)
 /** CAN controller option used to enable TX FIFO mode. */
 #define LLCE_CAN_CONTROLLERCONFIG_TXFIFO_EN (0x00000002U)
@@ -117,16 +119,17 @@
 #define LLCE_CAN_MB_PRECALC_LEN_SHIFT (24U)
 
 /** Constant used to identify a reserved mask id. */
-#define LLCE_CAN_FULLCAN_MASK 0xFFFFFFFFU
+#define LLCE_CAN_FULLCAN_MASK (0xFFFFFFFFU)
 
-#define LLCE_CAN2ETH_PFE_EMAC0 0x01U
-#define LLCE_CAN2ETH_PFE_EMAC1 0x02U
-#define LLCE_CAN2ETH_PFE_EMAC2 0x04U
-#define LLCE_CAN2ETH_PFE_HIF0 0x08U
-#define LLCE_CAN2ETH_PFE_HIF1 0x10U
-#define LLCE_CAN2ETH_PFE_HIF2 0x20U
-#define LLCE_CAN2ETH_PFE_HIF3 0x40U
-#define LLCE_CAN2ETH_PFE_HIFNOCPY 0x80U
+#define LLCE_CAN2ETH_PFE_EMAC0 (0x0001U)
+#define LLCE_CAN2ETH_PFE_EMAC1 (0x0002U)
+#define LLCE_CAN2ETH_PFE_EMAC2 (0x0004U)
+#define LLCE_CAN2ETH_PFE_HIF0 (0x0008U)
+#define LLCE_CAN2ETH_PFE_HIF1 (0x0010U)
+#define LLCE_CAN2ETH_PFE_HIF2 (0x0020U)
+#define LLCE_CAN2ETH_PFE_HIF3 (0x0040U)
+#define LLCE_CAN2ETH_PFE_HIFNOCPY (0x0080U)
+#define LLCE_CAN2ETH_PFE_AUX (0x0100U)
 
 /**
  * Notification IDs used to interface with LLCE.
@@ -171,7 +174,10 @@ enum llce_can_command_id {
 	LLCE_CAN_CMD_GETSTATUS,
 	/** The host configures multiple filters on the reception side.*/
 	LLCE_CAN_CMD_SETFILTER,
-	/** The host configures multiple advanced feature filters on reception side*/
+	/**
+	 * The host configures multiple advanced feature filters on
+	 * reception side
+	 */
 	LLCE_CAN_CMD_SETADVANCEDFILTER,
 	/** The host enables/disables the already set filter. */
 	LLCE_CAN_CMD_SETFILTERENABLESTATUS,
@@ -195,6 +201,11 @@ enum llce_can_command_id {
 	LLCE_CAN_CMD_INIT_PFE,
 	/**
 	 * Host request for platform initialization regarding
+	 * CAN2ETH-ETH2CAN use case using ring buffers generated on host side.
+	 */
+	LLCE_CAN_CMD_INIT_PFE_EXT_RING_BUF,
+	/**
+	 * Host request for platform initialization regarding
 	 * HSE bridge use case.
 	 */
 	LLCE_CAN_CMD_INIT_HSE,
@@ -210,10 +221,35 @@ enum llce_can_command_id {
 	LLCE_CAN_CMD_ABORT_MB,
 	/** Custom command to be implemented by user in FDK */
 	LLCE_CAN_CMD_CUSTOM,
-	/** The host configures multiple filters on the reception side for rxlut2 on g3.*/
+	/**
+	 * The host configures multiple filters on the reception side
+	 * for rxlut2 on g3.
+	 */
 	LLCE_CAN_CMD_SETAUXFILTER,
-	/** The host requests the addition of a new filter by specifying filter address.*/
-	LLCE_CAN_CMD_SETFILTER_AT_ADDRESS
+	/**
+	 * The host requests the addition of a new filter by specifying
+	 * filter address.
+	 */
+	LLCE_CAN_CMD_SETFILTER_AT_ADDRESS,
+	/**
+	 * The host enables or disables a channel in a routing multicast
+	 * configuration.
+	 */
+	LLCE_CAN_CMD_SETCHANNELROUTINGOUTPUTSTATE,
+	/** The host enables or disables can2eth processing entirely.*/
+	LLCE_CAN_CMD_SETCAN2ETHSTATE,
+	/**
+	 * The host enables or disables eth2can processing for a
+	 * format.
+	 */
+	LLCE_CAN_CMD_SETETH2CANFORMATSTATE,
+	/**
+	 * The host requests the addition of a new advanced filter by
+	 * specifying filter address.
+	 */
+	LLCE_CAN_CMD_SETADVANCEDFILTER_AT_ADDRESS,
+	/** The host enables or disables can2pcie processing entirely.*/
+	LLCE_CAN_CMD_SETCAN2PCIESTATE
 } __packed;
 
 /**
@@ -380,7 +416,9 @@ enum llce_af_rule_id {
 	/** Destination rule type used for can2can use case. */
 	CAN_AF_CAN2CAN = 0U,
 	/** Destination rule type used for can2eth use case. */
-	CAN_AF_CAN2ETH
+	CAN_AF_CAN2ETH,
+	/** Destination rule type used for can2pcie use case. */
+	CAN_AF_CAN2PCIE
 } __packed;
 
 /**
@@ -397,7 +435,12 @@ enum llce_can_eth_encapsulation_format {
 	/** IEEE1722-2016 AVPT time-synchronous CAN regular format */
 	LLCE_AF_CAN2AVTP_TSCF_FULL,
 	/** UDP format */
-	LLCE_AF_CAN2UDP
+	LLCE_AF_CAN2UDP,
+	/** UDP format, type B */
+	LLCE_AF_CAN2UDP_B,
+	/** Placeholder for maximum value */
+	LLCE_AF_CAN2ETH_FORMAT_MAX
+
 } __packed;
 /**
  * Initialization status of the controllers.
@@ -454,6 +497,12 @@ enum llce_can_rx_mb_length {
 	/** Opt for 8 bytes MB size accepted by a filter */
 	USE_SHORT_MB,
 } __packed;
+
+/**
+ * Generic binary type
+ * Logical binary type. Redefined for consistency.
+ **/
+enum llce_can_binary_value { LLCE_FALSE = 0, LLCE_TRUE } __packed;
 
 /*
  * These structure must be kept as they are because BCAN is
@@ -787,11 +836,11 @@ struct llce_can_rx_filter {
 /**
  * Filter element settings for Rx_lut2.
  * It is used to define a specific filter.Current filtering process supposes to
- * accept a frame if its frame ID match the filter ID masked with the mask
- * value. At the end of filtering process an internal filter ID is mapped to
- * the accepted frame in order to track it later by the host software.
- * A maximum number of frames accepted by a specific filter can be managed
- * by LLCE at each point in time.
+ * accept a frame if its frame ID matches the filter ID masked with the mask
+ * value. At the end of the filtering process, an internal filter ID is mapped
+ * to the accepted frame in order to track it later by the host software. A
+ * maximum number of frames accepted by a specific filter can be managed by LLCE
+ * at each point in time.
  **/
 struct llce_can_aux_filter {
 	/**
@@ -834,15 +883,16 @@ struct llce_can_set_filter_cmd {
 
 /**
  * Set filter command.
- * It is sent by the host to LLCE in order to configure one or more auxiliary reception
- * filters inside LLCE.
+ * It is sent by the host to LLCE in order to configure one or more auxiliary
+ * reception filters inside LLCE.
  **/
 struct llce_can_set_aux_filter_cmd {
 	/**
 	 * INPUT: Array containing configuration for reception
 	 * filters.
 	 */
-	struct llce_can_aux_filter rx_aux_filters[LLCE_CAN_CONFIG_MAX_FILTERS_COUNT];
+	struct llce_can_aux_filter
+		rx_aux_filters[LLCE_CAN_CONFIG_MAX_FILTERS_COUNT];
 	/** INPUT: Number of configured filters. */
 	u16 rx_aux_filters_count;
 } __aligned(4) __packed;
@@ -855,7 +905,14 @@ struct llce_can_set_aux_filter_cmd {
  * channels.
  **/
 struct llce_can_can2can_routing_table {
-	/** INPUT: Special option for advanced routing.*/
+	/**
+	 * INPUT: Special options for advanced routing. See
+	 * LLCE_CAN_ROUTING_OPTION_DEFAULT_CONFIG
+	 * LLCE_CAN_ROUTING_NOCHANGE
+	 * LLCE_CAN_ROUTING_CAN
+	 * LLCE_CAN_ROUTING_CANFD
+	 * LLCE_CAN_ROUTING_ID_REMAPPING_EN
+	 */
 	u32 can2can_routing_options;
 	/** INPUT: Can Id Remap Value.*/
 	u32 can_id_remap_value;
@@ -875,11 +932,16 @@ struct llce_can_can2can_routing_table {
  * routing.
  **/
 struct llce_can_can2eth_routing_table {
-	/** INPUT: Base address of the buffer area for this destination */
+	/**
+	 * INPUT: Base address of the buffer area for this destination
+	 */
 	u32 pcan2eth_buff_addr;
 	/** INPUT: Size of each buffer for this destination */
 	u16 can2eth_buff_size;
-	/** INPUT: Number of buffers of size can2eth_buff_size for this destination */
+	/**
+	 * INPUT: Number of buffers of size can2eth_buff_size for this
+	 * destination
+	 */
 	u8 can2eth_buff_count;
 	/** INPUT: Type of encapsulation */
 	enum llce_can_eth_encapsulation_format format;
@@ -895,8 +957,39 @@ struct llce_can_can2eth_routing_table {
 	u16 can2eth_dst_port;
 	/** INPUT: Source port (UDP only) */
 	u16 can2eth_src_port;
-	/** INPUT: Ethernet physical interface (bit list) - see LLCE_CAN2ETH_PFE_* */
-	u8 can2eth_phy_if_list;
+	/**
+	 * INPUT: Ethernet physical interface (bit list) - see
+	 * LLCE_CAN2ETH_PFE_*
+	 */
+	u16 can2eth_phy_if_list;
+} __aligned(4) __packed;
+
+/**
+ * Data structure type containing CAN to PCIe destination rule
+ * configuration.
+ * It is used to define a specific destination rule for can2pcie routing.
+ **/
+struct llce_can_can2pcie_routing_table {
+	/** INPUT: Base address of the buffer area on the RC side*/
+	u64 can2pcie_rc_buff_addr;
+	/**
+	 * INPUT: Base address of the local buffer area for this
+	 * destination
+	 */
+	u32 pcan2pcie_buff_addr;
+	/** INPUT: Size of each buffer for this destination */
+	u16 can2pcie_buff_size;
+	/**
+	 * INPUT: Number of buffers of size can2pcie_buff_size for this
+	 * destination
+	 */
+	u8 can2pcie_buff_count;
+	/** INPUT: PCIe controller used */
+	u8 can2pcie_controller;
+	/** INPUT: PCIe DMA channel used */
+	u8 can2pcie_dma_channel;
+	/** INPUT: MSI to trigger on transmission; 0xFF to disable */
+	u8 can2pcie_msi_id;
 } __aligned(4) __packed;
 
 /**
@@ -915,6 +1008,8 @@ struct can_af_dest_rules {
 		struct llce_can_can2can_routing_table can2can;
 		/** INPUT: Destination rule for can2eth use case.*/
 		struct llce_can_can2eth_routing_table can2eth;
+		/** INPUT: Destination rule for can2pcie use case.*/
+		struct llce_can_can2pcie_routing_table can2pcie;
 	} af_dest;
 	/** INPUT: Destination rule type.*/
 	enum llce_af_rule_id af_dest_id;
@@ -946,6 +1041,11 @@ struct llce_can_advanced_feature {
 	 * See struct llce_can_can2eth_routing_table
 	 */
 	u8 can2eth_routing_table_idx;
+	/**
+	 * INPUT: Other destination routing table index.
+	 * Reference to a routing table rule.
+	 */
+	u8 other_routing_table_idx;
 } __aligned(4) __packed;
 
 /**
@@ -957,9 +1057,9 @@ struct llce_can_advanced_feature {
  **/
 struct llce_can_advanced_filter {
 	/** INPUT: Standard filter configuration. */
-	struct llce_can_rx_filter llce_can_Rx_filter;
+	struct llce_can_rx_filter llce_can_rx_filter;
 	/** INPUT: Can advanced features used by the filter. */
-	struct llce_can_advanced_feature llce_can_Advanced_feature;
+	struct llce_can_advanced_feature llce_can_advanced_feature;
 } __aligned(4) __packed;
 
 /**
@@ -972,7 +1072,7 @@ struct llce_can_set_advanced_filter_cmd {
 	 * more filters.
 	 */
 	struct llce_can_advanced_filter
-	 advanced_filters[LLCE_CAN_CONFIG_ADVANCED_FILTERS_COUNT];
+		advanced_filters[LLCE_CAN_CONFIG_ADVANCED_FILTERS_COUNT];
 	/** INPUT: Number of configured filters. */
 	u16 rx_filters_count;
 } __aligned(4) __packed;
@@ -997,7 +1097,8 @@ struct llce_can_error_category {
 	/** Internal errors, like timeouts. */
 	enum llce_can_error_processing internal_err;
 	/** Bus_off processing is selectable per channel */
-	enum llce_can_error_processing bus_off_err[LLCE_CAN_CONFIG_MAXCTRL_COUNT];
+	enum llce_can_error_processing
+		bus_off_err[LLCE_CAN_CONFIG_MAXCTRL_COUNT];
 	/** Passive state + TX/RX WRN. */
 	enum llce_can_error_processing can_protocol_warn;
 } __aligned(4) __packed;
@@ -1045,8 +1146,9 @@ struct llce_can_init_platform_cmd {
 	 */
 	u16 max_poll_mb_count[LLCE_CAN_MAX_POLLING_CLASSES];
 	/**
-	 * INPUT: Array containing maximum number of reserved TX confirmation
-	 * buffers per output interface, considering interrupt processing.
+	 * INPUT: Array containing maximum number of reserved TX
+	 * confirmation buffers per output interface, considering interrupt
+	 * processing.
 	 */
 	u16 max_int_tx_ack_count[LLCE_CAN_CONFIG_MAXCTRL_COUNT];
 	/**
@@ -1098,11 +1200,15 @@ struct llce_can_init_cmd {
 struct llce_can_init_pfe_cmd {
 	/** OUTPUT: Address of the PFE RX Ring in LLCE memory */
 	u32 p_rx_ring;
-	/** OUTPUT: Address of the PFE RX Writeback Ring in LLCE memory */
+	/**
+	 * OUTPUT: Address of the PFE RX Writeback Ring in LLCE memory
+	 */
 	u32 p_rx_wb_ring;
 	/** OUTPUT: Address of the PFE TX Ring in LLCE memory */
 	u32 p_tx_ring;
-	/** OUTPUT: Address of the PFE TX Writeback Ring in LLCE memory */
+	/**
+	 * OUTPUT: Address of the PFE TX Writeback Ring in LLCE memory
+	 */
 	u32 p_tx_wb_ring;
 	/** INPUT: Pointer to the buffers used for RX */
 	u32 p_rx_buffers;
@@ -1110,6 +1216,37 @@ struct llce_can_init_pfe_cmd {
 	u16 rx_buf_size;
 	/** INPUT: Number of buffers used for RX */
 	u8 rx_buf_count;
+	/** INPUT: Index of the PFE HIF to use in LLCE */
+	u8 hif;
+} __aligned(4) __packed;
+
+/**
+ * LLCE-PFE Configurable Ring Initialization command.
+ * It is sent by the host to LLCE in order to activate the LLCE-PFE interface,
+ * use the addresses of the relevant data structures provided by the host.
+ * @note Use u32 instead of void*, for portability
+ **/
+struct llce_can_init_pfe_with_extern_ring_cmd {
+	/** INPUT: Address of the PFE RX Ring in LLCE memory */
+	u32 p_rx_ring;
+	/** INPUT: Address of the PFE RX Writeback Ring in LLCE memory */
+	u32 p_rx_wb_ring;
+	/** INPUT: Address of the PFE TX Ring in LLCE memory */
+	u32 p_tx_ring;
+	/** INPUT: Address of the PFE TX Writeback Ring in LLCE memory */
+	u32 p_tx_wb_ring;
+	/** INPUT: Pointer to the buffers used for RX */
+	u32 p_rx_buffers;
+	/** INPUT: Ring size of the PFE Rx Ring */
+	u32 ring_size;
+	/** INPUT: Pointer to the header */
+	u32 p_header;
+	/** INPUT: Size of the buffers used for RX */
+	u16 rx_buf_size;
+	/** INPUT: Number of buffers used for RX */
+	u8 rx_buf_count;
+	/** INPUT: Size of the header */
+	u8 header_size;
 	/** INPUT: Index of the PFE HIF to use in LLCE */
 	u8 hif;
 } __aligned(4) __packed;
@@ -1142,7 +1279,10 @@ struct llce_can_change_filter {
 	 * removed/disabled/enabled.
 	 */
 	u16 filter_addr;
-	/** INPUT: State of the filter when using Set_filter_enable_status command */
+	/**
+	 * INPUT: Request new state (0 - disable filter / 1 - enable
+	 * filter) of the filter when using Set_filter_enable_status command.
+	 */
 	u8 filter_enabled;
 } __aligned(4) __packed;
 
@@ -1172,6 +1312,18 @@ struct llce_can_abort_mb_cmd {
 	u8 aborted_frame_cnt;
 	/** INPUT: Specifies the type of AbortMB command. */
 	enum llce_can_abort_mb abort_mb_type;
+} __aligned(4) __packed;
+
+/**
+ * Set eth2can decapsulation state.
+ * It is sent by the host to LLCE in order to turn on or off decapsulation
+ * for a given format.
+ **/
+struct llce_can_set_eth2can_format_state_cmd {
+	/** INPUT: Encapsulation format */
+	enum llce_can_eth_encapsulation_format format;
+	/** INPUT: State to set */
+	enum llce_can_binary_value state;
 } __aligned(4) __packed;
 
 /**
@@ -1224,6 +1376,11 @@ union llce_can_command_list {
 	 * buffer locations
 	 */
 	struct llce_can_init_pfe_cmd init_pfe;
+	/**
+	 * Command for initializing the LLCE-PFE interface using user's
+	 * ring buffer input
+	 */
+	struct llce_can_init_pfe_with_extern_ring_cmd init_pfe_with_extern_ring;
 	/** Command for creating a destination for AF */
 	struct llce_can_create_af_destination create_af_dest;
 	/**
@@ -1234,10 +1391,18 @@ union llce_can_command_list {
 	/** Pointer to argument for custom command */
 	u32 p_custom_cmd_arg;
 	/**
-	 * Command for configuring custom filters for a specific CAN controller
-	 * in order to deliver frames to the host.
+	 * Command for configuring custom filters for a specific CAN
+	 * controller in order to deliver frames to the host.
 	 */
 	struct llce_can_set_aux_filter_cmd set_aux_filter;
+	/**
+	 * Generic argument for binary values
+	 */
+	enum llce_can_binary_value binary_value;
+	/**
+	 * Command for turning eth2can on or off for a certain format
+	 */
+	struct llce_can_set_eth2can_format_state_cmd Set_eth2can_format_state;
 } __aligned(4) __packed;
 
 /**
@@ -1351,14 +1516,14 @@ struct llce_can_notification_table {
 	 */
 	struct llce_can_notification
 		can_notif0_table[LLCE_CAN_CONFIG_HIF_COUNT]
-				 [LLCE_CAN_CONFIG_NOTIF_TABLE_SIZE];
+				[LLCE_CAN_CONFIG_NOTIF_TABLE_SIZE];
 	/**
 	 * OUTPUT: Table used to report notifications in polling mode.
 	 * See also struct llce_can_notification
 	 */
 	struct llce_can_notification
 		can_notif1_table[LLCE_CAN_CONFIG_HIF_COUNT]
-				 [LLCE_CAN_CONFIG_NOTIF_TABLE_SIZE];
+				[LLCE_CAN_CONFIG_NOTIF_TABLE_SIZE];
 } __aligned(4) __packed;
 
 /**
@@ -1367,23 +1532,28 @@ struct llce_can_notification_table {
  **/
 struct llce_can_shared_memory {
 	/** Receive message buffer descriptors. */
-	struct llce_can_rx_mb_desc
-		can_rx_mb_desc[LLCE_CAN_CONFIG_MAXRXMB +
-			       LLCE_CAN_CONFIG_MAX_SHORTRXMB];
+	struct llce_can_rx_mb_desc can_rx_mb_desc[LLCE_CAN_CONFIG_MAXRXMB +
+						  LLCE_CAN_CONFIG_MAX_SHORTRXMB];
 	/** Transmit message buffer descriptors. */
 	struct llce_can_tx_mb_desc can_tx_mb_desc[LLCE_CAN_CONFIG_MAXTXMB];
-	/** Shared memory used to store the LONG CAN message buffers (64B). */
+	/**
+	 * Shared memory used to store the LONG CAN message buffers
+	 * (64B).
+	 */
 	struct llce_can_mb can_mb[LLCE_CAN_CONFIG_MAXRXMB +
-				LLCE_CAN_CONFIG_MAXTXMB +
-				LLCE_CAN_CONFIG_MAXAFFRMB];
+				  LLCE_CAN_CONFIG_MAXTXMB +
+				  LLCE_CAN_CONFIG_MAXAFFRMB];
 
-	/** Shared memory used to store the SHORT CAN message buffers (8B). */
+	/**
+	 * Shared memory used to store the SHORT CAN message buffers
+	 * (8B).
+	 */
 	struct llce_can_short_mb can_short_mb[LLCE_CAN_CONFIG_MAX_SHORTRXMB];
 
 	/** Shared memory used to send commands from Host to LLCE . */
 	struct llce_can_command can_cmd[LLCE_CAN_CONFIG_HIF_COUNT];
 	/**
- * Shared memory used to store notifications from LLCE to host.
+	 * Shared memory used to store notifications from LLCE to host.
 	 */
 	struct llce_can_notification_table can_notification_table;
 	/**
@@ -1393,6 +1563,44 @@ struct llce_can_shared_memory {
 	 */
 	struct llce_can_tx2host_ack_info
 		can_tx_ack_info[LLCE_CAN_CONFIG_MAX_TXACKINFO];
+} __aligned(4) __packed;
+
+struct llce_can_rx_tx_count {
+	/** Shows the number of CAN frames received by each controller */
+	u32 general_rx_count;
+	/**
+	 * Shows the number of CAN frames sent by each controller and
+	 * acknowledged on the bus
+	 */
+	u32 general_tx_count;
+	/**
+	 * All CAN frames received by the controller from other
+	 * controllers via CAN
+	 */
+	u32 can2can_in_count;
+	/**
+	 * All CAN frames sent by the controller to other controller via
+	 * CAN
+	 */
+	u32 can2can_out_count;
+	/**
+	 * All CAN frames received by controller to be encapsulated in
+	 * Ethernet format and sent to PFE for transmission over ethernet
+	 */
+	u32 can2eth_count;
+	/**
+	 * All Ethernet frames transferred from PFE to LLCE controller
+	 * for decoding and transmission over CAN
+	 */
+	u32 eth2can_count;
+	/** Reserved for future use */
+	u32 reserved_count1;
+	/** Reserved for future use */
+	u32 reserved_count2;
+	/** Reserved for future use */
+	u32 reserved_count3;
+	/** Reserved for future use */
+	u32 reserved_count4;
 } __aligned(4) __packed;
 
 #endif /*LLCE_CAN_H*/

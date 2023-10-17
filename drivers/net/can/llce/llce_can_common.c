@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause
-/* Copyright 2021-2022 NXP */
+/* Copyright 2021-2023 NXP */
 #include <linux/can/dev.h>
 #include <linux/can/dev/llce_can_common.h>
 #include <linux/ctype.h>
@@ -33,7 +33,7 @@ struct llce_error {
 static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_TXACK_FIFO_FULL),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXOUT_FIFO_FULL),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_HW_FIFO_EMPTY),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_0),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_HW_FIFO_FULL),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_SW_FIFO_EMPTY),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_SW_FIFO_FULL),
@@ -61,23 +61,23 @@ static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_DATA_LOST),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_TXLUT_FULL),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CMD_PROCESSING),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_SLOW_SEARCH),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_1),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_ACCESS_MODE),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_SEARCH_MODE),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_SLOW_OPERATION),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_INCOMPLETE_OP),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_OPERATING_MODE),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_INIT_SLOW_OP),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_DEINIT_SLOW_OP),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_INIT_OPERATING_MODE),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_DEINIT_OPERATING_MODE1),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXLUT_DEINIT_OPERATING_MODE2),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_HARDWARE_BUSOFF),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_2),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_3),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_4),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_5),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_6),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CTRL_NOT_READY),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BUSOFF),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FIFO_LOG_FULL),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CAN2CAN),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_PARAM),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_7),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_8),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_RXPPE_NORESPONSE),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_AF_NORESPONSE),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_DEINIT_NOTSTOP),
@@ -87,11 +87,11 @@ static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_NOTVALIDATED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_NOTACCEPTED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_COMMAND_INVALID_PARAMS),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CTRL_NOT_STARTED),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_9),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FRAME_NOT_DELIVERED),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FRAME_NOT_DELIVERED_TO_AF),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_10),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FRAME_NOT_DELIVERED_TO_HOST),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_LOST_INDEXES),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_12),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FILTERS_FULL),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FILTERS_NOTEXIST),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FILTERS_MASK_EMPTY),
@@ -99,18 +99,15 @@ static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FILTERS_EM_EMPTY),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_IDX_NOT_VALID_HOST),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_IDX_NOT_VALID_LOG),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INVALID_HOST_CORE),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXFRAME_NOT_DELIVERED_TO_HSE),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_TXFRAME_NOT_DELIVERED_TO_HSE),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_13),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_14),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_15),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RXFRAME_AUTH_ERROR),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INVALID_REQUEST_FROM_TX),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INVALID_REQUEST_FROM_RX),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_16),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_17),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RX_SW_FIFO_EMPTY),
-	LLCE_ERROR_ENTRY(LLCE_ERROR_PFEIF),
-	LLCE_ERROR_ENTRY(LLCE_ERROR_HSEIF),
-	LLCE_ERROR_ENTRY(LLCE_FW_SUCCESS),
-	LLCE_ERROR_ENTRY(LLCE_FW_ERROR),
-	LLCE_ERROR_ENTRY(LLCE_FW_NOTRUN),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_PFEIF),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_HSEIF),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INTERNALDESC_NOT_RETURNED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INTERNALDESC_NOT_DELIVERED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INTERNALDESC_NOTAVAIL),
@@ -125,8 +122,10 @@ static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_NO_MB_TO_ABORT),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INDEX_NOT_RECOVERED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RESET_PENDING),
-	LLCE_CAN_ERROR_ENTRY(LLCE_NOTIF_BUSOFF_AUTO_RECOVERY_PENDING),
-	LLCE_CAN_ERROR_ENTRY(LLCE_NOTIF_BUSOFF_DONE),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_18),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_TXWRN),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_RXWRN),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_PASSERR),
 };
 
 static int get_llce_can_id(const char *node_name, int *id)
@@ -184,6 +183,7 @@ static int send_rx_msg(struct llce_can_dev *llce, struct llce_rx_msg *msg)
 int enable_llce_rx_notif(struct llce_can_dev *llce)
 {
 	struct llce_rx_msg msg = {
+		.error = LLCE_FW_SUCCESS,
 		.cmd = LLCE_ENABLE_RX_NOTIF,
 	};
 
@@ -194,6 +194,7 @@ EXPORT_SYMBOL(enable_llce_rx_notif);
 static bool is_rx_empty(struct llce_can_dev *llce)
 {
 	struct llce_rx_msg msg = {
+		.error = LLCE_FW_SUCCESS,
 		.cmd = LLCE_IS_RX_EMPTY,
 	};
 
@@ -208,6 +209,7 @@ static int pop_rx_fifo(struct llce_can_dev *llce, uint32_t *index, bool *skip,
 {
 	int ret;
 	struct llce_rx_msg msg = {
+		.error = LLCE_FW_SUCCESS,
 		.cmd = LLCE_POP_RX,
 	};
 
@@ -222,6 +224,7 @@ static int pop_rx_fifo(struct llce_can_dev *llce, uint32_t *index, bool *skip,
 static int release_rx_index(struct llce_can_dev *llce, uint32_t index)
 {
 	struct llce_rx_msg msg = {
+		.error = LLCE_FW_SUCCESS,
 		.cmd = LLCE_RELEASE_RX_INDEX,
 		.rx_release = {
 			.index = index,
@@ -253,15 +256,15 @@ static void process_rx_msg(struct llce_can_dev *llce,
 	u8 len, *payload;
 
 	if (can_mb->is_long) {
-		word0 = can_mb->data.longm->word0;
-		word1 = can_mb->data.longm->word1;
-		payload = &can_mb->data.longm->payload[0];
-		timestamp = can_mb->data.longm->timestamp;
+		word0 = can_mb->data.longm.word0;
+		word1 = can_mb->data.longm.word1;
+		payload = &can_mb->data.longm.payload[0];
+		timestamp = can_mb->data.longm.timestamp;
 	} else {
-		word0 = can_mb->data.shortm->word0;
-		word1 = can_mb->data.shortm->word1;
-		payload = &can_mb->data.shortm->payload[0];
-		timestamp = can_mb->data.shortm->timestamp;
+		word0 = can_mb->data.shortm.word0;
+		word1 = can_mb->data.shortm.word1;
+		payload = &can_mb->data.shortm.payload[0];
+		timestamp = can_mb->data.shortm.timestamp;
 	}
 
 	unpack_word0(word0, &rtr, &ide, &std_id, &ext_id);
@@ -424,7 +427,6 @@ void process_llce_can_error(struct llce_can_dev *llce,
 		can_stats->bus_error++;
 		break;
 	case LLCE_ERROR_BUSOFF:
-	case LLCE_ERROR_HARDWARE_BUSOFF:
 		/**
 		 * A restart is not needed as we have automatic
 		 * bus-off recovery
@@ -457,7 +459,7 @@ static void llce_rx_notif_callback(struct mbox_client *cl, void *msg)
 						 rx_client);
 
 	/* This is executed in IRQ context */
-	if (rx_msg->error)
+	if (rx_msg->error != LLCE_FW_SUCCESS)
 		process_llce_can_error(llce, rx_msg->error, LLCE_RX);
 
 	if (rx_msg->cmd == LLCE_RX_NOTIF) {
@@ -545,7 +547,7 @@ static int get_sset_count(struct net_device *dev, int sset)
 	return count;
 }
 
-static const struct ethtool_ops llce_can_ethtool_ops = {
+static const struct ethtool_ops llce_can_common_ethtool_ops = {
 	.get_ethtool_stats = get_ethtool_stats,
 	.get_strings = get_strings,
 	.get_sset_count = get_sset_count,
@@ -589,7 +591,7 @@ struct llce_can_dev *init_llce_can_dev(struct device *dev, size_t priv_size,
 
 	init_llce_rx_client(llce, dev);
 
-	netdev->ethtool_ops = &llce_can_ethtool_ops;
+	netdev->ethtool_ops = &llce_can_common_ethtool_ops;
 
 free_mem:
 	if (ret) {
@@ -607,3 +609,41 @@ void free_llce_netdev(struct llce_can_dev *dev)
 }
 EXPORT_SYMBOL(free_llce_netdev);
 
+int llce_send_config_cmd(struct mbox_chan *conf_chan,
+			 struct llce_config_msg *msg,
+			 struct completion *config_done)
+{
+	struct device *dev = llce_can_chan_dev(conf_chan);
+	enum llce_fw_return cmd_ret;
+	int ret;
+
+	ret = mbox_send_message(conf_chan, msg);
+	if (ret < 0)
+		return ret;
+
+	wait_for_completion(config_done);
+	switch (msg->cmd) {
+	case LLCE_EXECUTE_FW_CMD:
+	case LLCE_EXECUTE_FW_HIF_CMD:
+		cmd_ret = msg->fw_cmd.cmd.return_value;
+		if (cmd_ret == LLCE_ERROR_COMMAND_NOTSUPPORTED)
+			return -EOPNOTSUPP;
+
+		if (cmd_ret != LLCE_FW_SUCCESS) {
+			dev_err(dev, "LLCE FW error %d\n",
+				msg->fw_cmd.cmd.return_value);
+			return -EIO;
+		}
+
+		break;
+	case LLCE_EXECUTE_SW_CMD:
+		break;
+	default:
+		dev_err(dev, "Unknown command for CAN cfg channel %u\n",
+			msg->cmd);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(llce_send_config_cmd);

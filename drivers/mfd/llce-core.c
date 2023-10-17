@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause
-/* Copyright 2020-2021 NXP */
+/* Copyright 2020-2021, 2023 NXP */
 #include <linux/clk.h>
+#include <linux/debugfs.h>
 #include <linux/firmware.h>
 #include <linux/genalloc.h>
 #include <linux/kernel.h>
 #include <linux/mailbox/nxp-llce/llce_fw_interface.h>
+#include <linux/mailbox/nxp-llce/llce_core.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/of_address.h>
@@ -13,7 +15,12 @@
 #include <linux/processor.h>
 #include <linux/slab.h>
 
-#define LLCE_STATUS_REGION	"status"
+#define LLCE_CORE_DIR		"llce_core"
+#define LLCE_CORE1_TS		"core1_ts"
+#define LLCE_CORE2_TS		"core2_ts"
+#define LLCE_CORE3_TS		"core3_ts"
+
+#define LLCE_SHMEM_REGION	"shmem"
 #define LLCE_SYSRSTR		0x0
 #define LLCE_SYSRSTR_RST0	BIT(0)
 #define LLCE_SYSRSTR_RST1	BIT(1)
@@ -29,15 +36,7 @@
 #define LLCE_MGR_TX_BOOT_END			(0x00000F00U)
 #define LLCE_MGR_FRPE_BOOT_END			(0x0000F000U)
 #define LLCE_MGR_BOOT_END_ALL_CORES_MASK	(0x0000FFFFU)
-#define STATUS_REGS_OFFSET			(0x8A0U)
-
-
-struct llce_fw_cont {
-	struct platform_device *pdev;
-	int index;
-	const char *img_name;
-	u16 retries;
-};
+#define CORES_TS_OFFSET				(0x13FD0)
 
 struct sram_node {
 	const char *name;
@@ -54,6 +53,8 @@ struct llce_core {
 	struct clk *clk;
 	void __iomem *sysctrl_base;
 	struct llce_fw *fws;
+	struct device *dev;
+	struct dentry *debugfs_root;
 
 	struct sram_node *sram_nodes;
 	size_t n_sram;
@@ -154,6 +155,20 @@ static struct sram_node *get_core_sram(struct llce_core *core, const char *name)
 	return NULL;
 }
 
+static void __iomem *get_status_regs(struct llce_core *core)
+{
+	struct device *dev = core->dev;
+	struct sram_node *shmem = get_core_sram(core, LLCE_SHMEM_REGION);
+
+	if (!shmem) {
+		dev_err(dev, "Memory region %s not found\n",
+			LLCE_SHMEM_REGION);
+		return NULL;
+	}
+
+	return llce_get_status_regs_addr(shmem->addr);
+}
+
 static int llce_load_fw_images(struct device *dev, struct llce_core *core)
 {
 	int i, ret;
@@ -227,42 +242,46 @@ static void reset_llce_cores(void __iomem *sysctrl_base)
 	writel(0x0, sysctrl_base + LLCE_SYSRSTR);
 }
 
-static bool llce_boot_end(struct device *dev, void *status_reg, bool verbose)
+static bool llce_boot_end(struct device *dev, void __iomem *status_reg,
+			  bool verbose)
 {
-	struct llce_mgr_status *mgr_status = status_reg;
+	struct llce_mgr_status mgr_status;
 
-	if (mgr_status->tx_boot_status != LLCE_FW_SUCCESS) {
+	memcpy_fromio(&mgr_status, status_reg, sizeof(mgr_status));
+
+	if (mgr_status.tx_boot_status != LLCE_FW_SUCCESS) {
 		if (verbose)
 			dev_err(dev, "TX boot failed with status: %d\n",
-				mgr_status->tx_boot_status);
+				mgr_status.tx_boot_status);
 		return false;
 	}
 
-	if (mgr_status->rx_boot_status != LLCE_FW_SUCCESS) {
+	if (mgr_status.rx_boot_status != LLCE_FW_SUCCESS) {
 		if (verbose)
 			dev_err(dev, "RX boot failed with status: %d\n",
-				mgr_status->rx_boot_status);
+				mgr_status.rx_boot_status);
 		return false;
 	}
 
-	if (mgr_status->dte_boot_status != LLCE_FW_SUCCESS) {
+	if (mgr_status.dte_boot_status != LLCE_FW_SUCCESS) {
 		if (verbose)
 			dev_err(dev, "DTE boot failed with status: %d\n",
-				mgr_status->dte_boot_status);
+				mgr_status.dte_boot_status);
 		return false;
 	}
 
-	if (mgr_status->frpe_boot_status != LLCE_FW_SUCCESS) {
+	if (mgr_status.frpe_boot_status != LLCE_FW_SUCCESS) {
 		if (verbose)
 			dev_err(dev, "FRPE boot failed with status: %d\n",
-				mgr_status->frpe_boot_status);
+				mgr_status.frpe_boot_status);
 		return false;
 	}
 
 	return true;
 }
 
-static bool llce_boot_end_or_timeout(struct device *dev, void *status_reg,
+static bool llce_boot_end_or_timeout(struct device *dev,
+				     void __iomem *status_reg,
 				     ktime_t timeout)
 {
 	ktime_t cur = ktime_get();
@@ -272,7 +291,7 @@ static bool llce_boot_end_or_timeout(struct device *dev, void *status_reg,
 }
 
 static int llce_cores_kickoff(struct device *dev, void __iomem *sysctrl_base,
-			      void *status_reg)
+			      void __iomem *status_reg)
 {
 	ktime_t timeout = ktime_add_ns(ktime_get(), LLCE_BOOT_POLL_NS);
 	u32 mask = LLCE_SYSRSTR_RST0 | LLCE_SYSRSTR_RST1 |
@@ -316,24 +335,92 @@ static void deinit_core_clock(struct llce_core *core)
 
 static int start_llce_cores(struct device *dev, struct llce_core *core)
 {
+	void __iomem *status = get_status_regs(core);
 	int ret;
-	struct sram_node *status = get_core_sram(core, LLCE_STATUS_REGION);
 
-	if (!status) {
-		dev_err(dev, "Memory region %s not found\n",
-			LLCE_STATUS_REGION);
+	if (!status)
 		return -EINVAL;
-	}
 
 	reset_llce_cores(core->sysctrl_base);
 
 	llce_flush_fw(core);
 
-	ret = llce_cores_kickoff(dev, core->sysctrl_base,
-				 status->addr + STATUS_REGS_OFFSET);
+	ret = llce_cores_kickoff(dev, core->sysctrl_base, status);
 	if (ret) {
 		dev_err(dev, "Failed to start LLCE cores\n");
 		return ret;
+	}
+
+	return 0;
+}
+
+static int debugfs_readl_get(void *data, u64 *val)
+{
+	uintptr_t addr = (uintptr_t)data;
+
+	*val = readl((void __iomem *)addr);
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(fops_x32_readl, debugfs_readl_get, NULL, "0x%08llx\n");
+
+static struct dentry *debugfs_create_readl(const char *name,
+					   struct dentry *parent,
+					   uintptr_t value)
+{
+	return debugfs_create_file_unsafe(name, 0400, parent, (void *)value,
+					  &fops_x32_readl);
+}
+
+static void remove_debugfs_files(struct llce_core *core)
+{
+	if (!IS_ENABLED(CONFIG_DEBUG_FS))
+		return;
+
+	debugfs_remove_recursive(core->debugfs_root);
+}
+
+static int init_debugfs_files(struct llce_core *core)
+{
+	struct llce_mgr_time_stamp_cores __iomem *ts;
+	struct device *dev = core->dev;
+	void __iomem *cores_ts, *status;
+	struct dentry *file;
+
+	if (!IS_ENABLED(CONFIG_DEBUG_FS))
+		return 0;
+
+	status = get_status_regs(core);
+	if (!status)
+		return -EINVAL;
+
+	cores_ts = status + CORES_TS_OFFSET;
+	ts = cores_ts;
+
+	core->debugfs_root = debugfs_create_dir(LLCE_CORE_DIR, NULL);
+	if (IS_ERR(core->debugfs_root)) {
+		dev_err(dev, "Failed to create %s directory\n",
+			LLCE_CORE_DIR);
+		return PTR_ERR(core->debugfs_root);
+	}
+
+	file = debugfs_create_readl(LLCE_CORE1_TS, core->debugfs_root,
+			     (uintptr_t)&ts->time_stamp_core1);
+	if (IS_ERR(file))
+		goto remove_folder;
+
+	file = debugfs_create_readl(LLCE_CORE2_TS, core->debugfs_root,
+			     (uintptr_t)&ts->time_stamp_core2);
+	if (IS_ERR(file))
+		goto remove_folder;
+
+	file = debugfs_create_readl(LLCE_CORE3_TS, core->debugfs_root,
+			     (uintptr_t)&ts->time_stamp_core3);
+
+remove_folder:
+	if (IS_ERR(file)) {
+		remove_debugfs_files(core);
+		return PTR_ERR(file);
 	}
 
 	return 0;
@@ -353,6 +440,7 @@ static int llce_core_probe(struct platform_device *pdev)
 	if (!core)
 		return -ENOMEM;
 
+	core->dev = dev;
 	platform_set_drvdata(pdev, core);
 
 	sysctrl_res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
@@ -390,8 +478,14 @@ static int llce_core_probe(struct platform_device *pdev)
 	dev_info(dev, "Successfully loaded LLCE firmware\n");
 
 	ret = devm_of_platform_populate(&pdev->dev);
-	if (ret)
+	if (ret) {
 		dev_err(dev, "Failed to load LLCE firmware\n");
+		goto release_fw;
+	}
+
+	ret = init_debugfs_files(core);
+	if (ret)
+		dev_err(dev, "Failed to initialize debugfs files\n");
 
 release_fw:
 	if (ret)
@@ -410,6 +504,7 @@ static int llce_core_remove(struct platform_device *pdev)
 	if (!load_fw)
 		return 0;
 
+	remove_debugfs_files(core);
 	llce_release_fw_images(core);
 	deinit_core_clock(core);
 	return 0;
@@ -435,11 +530,11 @@ static int __maybe_unused llce_core_resume(struct device *dev)
 	if (!load_fw)
 		return 0;
 
-	init_sram_nodes(core);
-
 	ret = init_core_clock(dev, core);
 	if (ret)
 		return ret;
+
+	init_sram_nodes(core);
 
 	return start_llce_cores(dev, core);
 }

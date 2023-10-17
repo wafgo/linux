@@ -10,12 +10,14 @@
 
 #include "s32cc.dtsi"
 #include <dt-bindings/clock/s32r45-scmi-clock.h>
+#include <dt-bindings/mux/nxp-s32r45-can-ts.h>
 
 / {
 	compatible = "nxp,s32r45";
 
 	aliases {
 		can4 = &can4;
+		ehthernet1 = &gmac1;
 	};
 
 	reserved-memory {
@@ -62,7 +64,8 @@
 				 <EIRQS_SIUL2_1 0 0x0 0x4403c010 0x0 0xb4>;
 
 			pinctrl: siul2-pinctrl@4009c240 {
-				compatible = "nxp,s32r45-siul2-pinctrl";
+				compatible = "nxp,s32r45-siul2-pinctrl",
+					     "nxp,s32cc-siul2-pinctrl";
 				#pinctrl-cells = <2>;
 
 				reg = <MSCRS_SIUL2_0   0 0x0 0x198>,
@@ -82,7 +85,7 @@
 			};
 
 			gpio: siul2-gpio@4009d700 {
-				compatible = "nxp,s32r-siul2-gpio";
+				compatible = "nxp,s32r-siul2-gpio", "nxp,s32cc-siul2-gpio";
 
 				reg = <OPADS_SIUL2_0       0 0x0 0x10>,
 				      <OPADS_SIUL2_1       0 0x0 0x14>,
@@ -255,6 +258,26 @@
 			};
 		};
 	};
+
+	thermal-zones {
+		a53_cores {
+			polling-delay-passive = <1000>;
+			polling-delay = <5000>;
+			thermal-sensors = <&tmu 0>;
+		};
+
+		radar_lax {
+			polling-delay-passive = <1000>;
+			polling-delay = <5000>;
+			thermal-sensors = <&tmu 1>;
+		};
+
+		analog_ips {
+			polling-delay-passive = <1000>;
+			polling-delay = <5000>;
+			thermal-sensors = <&tmu 2>;
+		};
+	};
 };
 
 &ddr_errata {
@@ -287,6 +310,79 @@
 	msi-parent = <&gic>;
 };
 
+&pinctrl {
+	sd0_pins_default: sd0_default {
+		sd0_default_grp0 {
+			pinmux = <S32CC_PINMUX(46, FUNC1)>,
+				 <S32CC_PINMUX(56, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_150MHZ>;
+			bias-pull-down;
+		};
+
+		sd0_default_grp1 {
+			pinmux = <S32CC_PINMUX(47, FUNC1)>,
+				 <S32CC_PINMUX(48, FUNC1)>,
+				 <S32CC_PINMUX(49, FUNC1)>,
+				 <S32CC_PINMUX(50, FUNC1)>,
+				 <S32CC_PINMUX(51, FUNC1)>,
+				 <S32CC_PINMUX(52, FUNC1)>,
+				 <S32CC_PINMUX(53, FUNC1)>,
+				 <S32CC_PINMUX(54, FUNC1)>,
+				 <S32CC_PINMUX(55, FUNC1)>;
+			output-enable;
+			input-enable;
+			slew-rate = <S32CC_SLEW_150MHZ>;
+			bias-pull-up;
+		};
+
+		sd0_default_grp2 {
+			pinmux = <S32CC_PINMUX(57, FUNC1)>;
+			output-enable;
+			slew-rate = <S32CC_SLEW_150MHZ>;
+		};
+
+		sd0_default_grp3 {
+			pinmux = <S32CC_PINMUX(515, FUNC2)>,
+				 <S32CC_PINMUX(516, FUNC2)>,
+				 <S32CC_PINMUX(517, FUNC2)>,
+				 <S32CC_PINMUX(518, FUNC2)>,
+				 <S32CC_PINMUX(519, FUNC2)>,
+				 <S32CC_PINMUX(520, FUNC2)>,
+				 <S32CC_PINMUX(521, FUNC2)>,
+				 <S32CC_PINMUX(522, FUNC2)>,
+				 <S32CC_PINMUX(523, FUNC2)>;
+		};
+	};
+};
+
+&ocotp {
+	compatible = "nxp,s32r45-ocotp";
+};
+
 &tmu {
-	compatible = "nxp,s32r45-tmu";
+	fsl,tmu-range = <0xe4 0xe9 0xfd 0x12a 0x1a7 0x1ac>;
+	fsl,tmu-calibration = <0 0x20  0x7c0
+			       1 0x29  0x7c0
+			       2 0x4e  0x0
+			       3 0xa3  0x0
+			       4 0x195 0x1f
+			       5 0x19f 0x1f>;
+};
+
+&stm0 {
+	status = "okay";
+};
+
+&stm1 {
+	status = "okay";
+};
+
+/* Used for FlexCAN timestamping */
+&stm7 {
+	status = "okay";
+};
+
+&can_ts_ctrl {
+	idle-states = <S32R45_CAN_TS_STM7>;
 };

@@ -5,7 +5,7 @@
  * This file contains the user-space I/O support for the Hardware Security
  * Engine user space driver. Used by the HSE user space library - libhse.
  *
- * Copyright 2021-2022 NXP
+ * Copyright 2021-2023 NXP
  */
 
 #include <linux/kernel.h>
@@ -17,6 +17,10 @@
 #include <linux/uio_driver.h>
 #include <linux/of.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/dma-mapping.h>
+
+#define DRIVER_NAME       "hse-uio"
+#define DRIVER_VERSION    "2.1"
 
 #define HSE_REGS_NAME       "hse-" CONFIG_UIO_NXP_HSE_MU "-regs"
 #define HSE_DESC_NAME       "hse-" CONFIG_UIO_NXP_HSE_MU "-desc"
@@ -25,6 +29,8 @@
 
 #define HSE_NUM_CHANNELS    16u /* number of available service channels */
 
+#define HSE_CHANNEL_ANY    0xACu /* use any channel, no request ordering */
+#define HSE_CHANNEL_ADM    0u /* channel reserved for administrative services */
 #define HSE_CHANNEL_INV    0xFFu /* invalid acquired service channel index */
 #define HSE_CH_MASK_ALL    0x0000FFFFul /* all available channels irq mask */
 
@@ -50,6 +56,21 @@ enum hse_uio_map_idx {
 };
 
 /**
+ * enum hse_status - HSE status
+ * @HSE_STATUS_RNG_INIT_OK: RNG initialization successfully completed
+ * @HSE_STATUS_INIT_OK: HSE initialization successfully completed
+ * @HSE_STATUS_INSTALL_OK: HSE installation phase successfully completed,
+ *                         key stores have been formatted and can be used
+ * @HSE_STATUS_PUBLISH_SYS_IMAGE: volatile HSE configuration detected
+ */
+enum hse_status {
+	HSE_STATUS_RNG_INIT_OK = BIT(5),
+	HSE_STATUS_INIT_OK = BIT(8),
+	HSE_STATUS_INSTALL_OK = BIT(9),
+	HSE_STATUS_PUBLISH_SYS_IMAGE = BIT(13),
+};
+
+/**
  * enum hse_irq_type - HSE interrupt type
  * @HSE_INT_ACK_REQUEST: TX Interrupt, triggered when HSE acknowledged the
  *                       service request and released the service channel
@@ -64,15 +85,122 @@ enum hse_irq_type {
 };
 
 /**
+ * enum hse_srv_id - HSE service ID
+ * @HSE_SRV_ID_GET_ATTR: get attribute, such as firmware version
+ * @HSE_SRV_ID_PREPARE_FOR_STANDBY: prepare for system stand-by mode
+ */
+enum hse_srv_id {
+	HSE_SRV_ID_GET_ATTR = 0x00A50002ul,
+	HSE_SRV_ID_PREPARE_FOR_STANDBY = 0x00A50017ul,
+};
+
+/**
+ * enum hse_srv_response - HSE service response
+ * @HSE_SRV_RSP_OK: service successfully executed with no error
+ * @HSE_SRV_RSP_NOT_ALLOWED: operation subject to restrictions (in attributes,
+ *                           life-cycle dependent operations, key-management)
+ * @HSE_SRV_RSP_CANCELED: service has been canceled
+ */
+enum hse_srv_response {
+	HSE_SRV_RSP_OK = 0x55A5AA33ul,
+	HSE_SRV_RSP_NOT_ALLOWED = 0xAA55A21Cul,
+	HSE_SRV_RSP_CANCELED = 0x33D6D396ul,
+};
+
+/**
+ * enum hse_host_event - HSE host event
+ * @HSE_HOST_PERIPH_CONFIG_DONE: sent by the host to notify HSE when external
+ *                               peripherals have been configured at init-time
+ *                               (signal valid only when triggered from MU0)
+ */
+enum hse_host_event {
+	HSE_HOST_PERIPH_CONFIG_DONE = BIT(0),
+};
+
+/**
+ * enum hse_fw_status - HSE firmware status
+ * @HSE_FW_SHUTDOWN: firmware not initialized or shut down due to fatal error
+ * @HSE_FW_RUNNING: firmware running and able to service any type of request
+ * @HSE_FW_STANDBY: firmware considered in stand-by state, no service requests
+ */
+enum hse_fw_status {
+	HSE_FW_SHUTDOWN = 0u,
+	HSE_FW_RUNNING = 1u,
+	HSE_FW_STANDBY = 2u,
+};
+
+/**
+ * enum hse_fw_type - HSE firmware type
+ * @HSE_FW_STANDARD: standard firmware
+ * @HSE_FW_PREMIUM: premium firmware
+ * @HSE_FW_CUSTOM: custom firmware
+ */
+enum hse_fw_type {
+	HSE_FW_STANDARD = 0u,
+	HSE_FW_PREMIUM = 1u,
+	HSE_FW_CUSTOM = 8u,
+};
+
+/**
+ * enum hse_attr - HSE attribute
+ * @HSE_FW_VERSION_ATTR_ID: firmware version
+ */
+enum hse_attr {
+	HSE_FW_VERSION_ATTR_ID = 1u,
+};
+
+/**
+ * struct hse_attr_fw_version - firmware version
+ * @fw_type: attribute ID
+ * @major: major revision
+ * @minor: minor revision
+ * @patch: patch version
+ */
+struct hse_attr_fw_version {
+	u8 reserved[2];
+	u16 fw_type;
+	u8 major;
+	u8 minor;
+	u16 patch;
+} __packed;
+
+/**
+ * struct hse_srv_desc - HSE service descriptor, used to retrieve fw version
+ * @srv_id: service ID of the HSE request
+ * @get_attr_req.attr_id: attribute ID
+ * @get_attr_req.attr_len: attribute length, in bytes
+ * @get_attr_req.attr: DMA address of the attribute
+ */
+struct hse_srv_desc {
+	u32 srv_id;
+	u8 reserved[4];
+	struct hse_get_attr_srv {
+		u16 attr_id;
+		u8 reserved[2];
+		u32 attr_len;
+		u64 attr;
+	} get_attr_req;
+} __packed;
+
+/**
  * struct hse_uio_intl - driver internal shared memory layout
- * @ready[n]: reply ready on channel n
- * @reply[n]: service response on channel n
- * @event: HSE system event mask
+ * @channel_ready[n]: reply ready on channel n
+ * @channel_reply[n]: response on channel n
+ * @event: HSE firmware system event mask
+ * @setup_done: initialization sequence done flag
+ * @firmware_status: cached status of HSE firmware
+ * @channel_busy[n]: service channel busy flag
+ * @channel_res[n]: channel currently reserved
  */
 struct hse_uio_intl {
-	u8 ready[HSE_NUM_CHANNELS];
-	u32 reply[HSE_NUM_CHANNELS];
+	u8 channel_ready[HSE_NUM_CHANNELS];
+	u32 channel_reply[HSE_NUM_CHANNELS];
 	u32 event;
+	bool setup_done;
+	enum hse_fw_status firmware_status;
+	u8 reserved[2];
+	bool channel_busy[HSE_NUM_CHANNELS];
+	bool channel_res[HSE_NUM_CHANNELS];
 } __packed;
 
 /**
@@ -120,20 +248,22 @@ struct hse_mu_regs {
  * struct hse_uio_drvdata - HSE UIO driver private data
  * @dev: HSE UIO device
  * @info: UIO device info
- * @refcnt: open/close reference counter
+ * @refcnt: open instances reference counter
  * @regs: MU register space base virtual address
  * @desc: service descriptor space base virtual address
  * @intl: driver internal shared memory base address
  * @reg_lock: spinlock preventing concurrent register access
+ * @firmware_version: firmware version attribute structure
  */
 struct hse_uio_drvdata {
 	struct device *dev;
 	struct uio_info info;
-	refcount_t refcnt;
+	atomic_t inst_refcnt;
 	struct hse_mu_regs __iomem *regs;
 	void __iomem *desc;
 	struct hse_uio_intl *intl;
 	spinlock_t reg_lock; /* covers irq enable/disable */
+	struct hse_attr_fw_version firmware_version ____cacheline_aligned;
 };
 
 /**
@@ -187,6 +317,19 @@ static u32 hse_uio_check_event(struct device *dev)
 	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
 
 	return ioread32(&drv->regs->gsr);
+}
+
+/**
+ * hse_uio_trigger_event - trigger HSE host event
+ * @dev: HSE UIO device
+ *
+ * Return: HSE host event mask
+ */
+static void hse_uio_trigger_event(struct device *dev, u32 evt)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+
+	return iowrite32(evt, &drv->regs->gcr);
 }
 
 /**
@@ -332,6 +475,34 @@ static int hse_uio_irqcontrol(struct uio_info *info, s32 cmd)
 }
 
 /**
+ * hse_uio_channel_available - check service channel status
+ * @dev: HSE UIO device
+ * @channel: channel index
+ *
+ * The 16 LSB of MU instance FSR are used by HSE for signaling channel status
+ * as busy after a service request has been sent, until the HSE reply is ready.
+ *
+ * Return: true for channel available, false for invalid index or channel busy
+ */
+static bool hse_uio_channel_available(struct device *dev, u8 channel)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+	u32 fsrval, tsrval, rsrval;
+
+	if (unlikely(channel >= HSE_NUM_CHANNELS))
+		return false;
+
+	fsrval = ioread32(&drv->regs->fsr) & BIT(channel);
+	tsrval = ioread32(&drv->regs->tsr) & BIT(channel);
+	rsrval = ioread32(&drv->regs->rsr) & BIT(channel);
+
+	if (fsrval || !tsrval || rsrval)
+		return false;
+
+	return true;
+}
+
+/**
  * hse_uio_next_pending_channel - find the next channel with pending message
  * @dev: HSE UIO device
  *
@@ -371,6 +542,33 @@ static bool hse_uio_msg_pending(struct device *dev, u8 channel)
 }
 
 /**
+ * hse_uio_msg_send - send a message over MU (non-blocking)
+ * @dev: HSE UIO device
+ * @channel: channel index
+ * @msg: input message
+ *
+ * Return: 0 on success, -EINVAL for invalid parameter, -ECHRNG for channel
+ *         index out of range, -EBUSY for selected channel busy
+ */
+static int hse_uio_msg_send(struct device *dev, u8 channel, u32 msg)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+
+	if (unlikely(!dev))
+		return -EINVAL;
+
+	if (unlikely(channel >= HSE_NUM_CHANNELS))
+		return -ECHRNG;
+
+	if (unlikely(!hse_uio_channel_available(dev, channel)))
+		return -EBUSY;
+
+	iowrite32(msg, &drv->regs->tr[channel]);
+
+	return 0;
+}
+
+/**
  * hse_uio_msg_recv - read a message received over MU (non-blocking)
  * @dev: HSE UIO device
  * @channel: channel index
@@ -398,23 +596,83 @@ static int hse_uio_msg_recv(struct device *dev, u8 channel, u32 *msg)
 }
 
 /**
+ * hse_uio_check_fw_version - retrieve firmware version
+ * @dev: HSE UIO device
+ */
+static int hse_uio_check_fw_version(struct device *dev)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+	u32 msg = lower_32_bits(drv->info.mem[HSE_UIO_MAP_DESC].addr);
+	dma_addr_t firmware_version_dma;
+	struct hse_srv_desc srv_desc;
+	int err = 0;
+
+	firmware_version_dma = dma_map_single(dev, &drv->firmware_version,
+					      sizeof(drv->firmware_version),
+					      DMA_FROM_DEVICE);
+	if (unlikely(dma_mapping_error(dev, firmware_version_dma)))
+		return -ENOMEM;
+
+	/* reserve channel zero */
+	if (unlikely(drv->intl->channel_busy[HSE_CHANNEL_ADM])) {
+		dev_err(dev, "%s: channel %d busy\n", __func__, HSE_CHANNEL_ADM);
+		goto out;
+	}
+	drv->intl->channel_busy[HSE_CHANNEL_ADM] = true;
+
+	/* fill descriptor in */
+	memzero_explicit(&srv_desc, sizeof(srv_desc));
+	srv_desc.srv_id = HSE_SRV_ID_GET_ATTR;
+	srv_desc.get_attr_req.attr_id = HSE_FW_VERSION_ATTR_ID;
+	srv_desc.get_attr_req.attr_len = sizeof(drv->firmware_version);
+	srv_desc.get_attr_req.attr = firmware_version_dma;
+	memcpy_toio(drv->desc, &srv_desc, sizeof(srv_desc));
+
+	/* send request */
+	err = hse_uio_msg_send(dev, HSE_CHANNEL_ADM, msg);
+	if (unlikely(err)) {
+		dev_err(dev, "%s: send request failed: %d\n", __func__, err);
+		goto out;
+	}
+
+	/* wait for response from firmware */
+	while (!hse_uio_msg_pending(dev, HSE_CHANNEL_ADM))
+		;
+
+	/* read reply */
+	err = hse_uio_msg_recv(dev, HSE_CHANNEL_ADM, &msg);
+	if (unlikely(err)) {
+		dev_err(dev, "%s: read reply failed: %d\n", __func__, err);
+		goto out;
+	}
+
+	if (unlikely(msg != HSE_SRV_RSP_OK))
+		dev_warn(dev, "%s: request failed: 0x%08x\n", __func__, msg);
+out:
+	dma_unmap_single(dev, firmware_version_dma,
+			 sizeof(drv->firmware_version), DMA_FROM_DEVICE);
+	drv->intl->channel_busy[HSE_CHANNEL_ADM] = false;
+	return err;
+}
+
+/**
  * hse_uio_open - open /dev/uioX device
  * @info: UIO device info
  * @inode: inode, not used
  *
- * Protects against multiple driver instances using UIO support.
+ * Enables RX interrupts if there is at least one libhse instance active.
  */
 static int hse_uio_open(struct uio_info *info, struct inode *inode)
 {
 	struct hse_uio_drvdata *drv = info->priv;
 
-	if (!refcount_dec_if_one(&drv->refcnt)) {
-		dev_err(drv->dev, "device %s already in use\n", info->name);
+	if (!atomic_read(&drv->inst_refcnt))
+		hse_uio_irqcontrol(&drv->info, HSE_UIO_ENABLE_RX_IRQ_CMD);
 
-		return -EBUSY;
-	}
+	atomic_inc(&drv->inst_refcnt);
 
-	dev_info(drv->dev, "device %s open\n", info->name);
+	dev_info(drv->dev, "device %s v%s open, instances: %d\n",
+		 info->name, info->version, atomic_read(&drv->inst_refcnt));
 
 	return 0;
 }
@@ -424,15 +682,17 @@ static int hse_uio_open(struct uio_info *info, struct inode *inode)
  * @info: UIO device info
  * @inode: inode, not used
  *
- * Protects against multiple driver instances using UIO support.
+ * Disables RX interrupts if there are no libhse instances active.
  */
 static int hse_uio_release(struct uio_info *info, struct inode *inode)
 {
 	struct hse_uio_drvdata *drv = info->priv;
 
-	refcount_set(&drv->refcnt, 1);
+	if (atomic_dec_and_test(&drv->inst_refcnt))
+		hse_uio_irqcontrol(&drv->info, HSE_UIO_DISABLE_RX_IRQ_CMD);
 
-	dev_info(drv->dev, "device %s released\n", info->name);
+	dev_info(drv->dev, "device %s v%s released, instances: %d\n",
+		 info->name, info->version, atomic_read(&drv->inst_refcnt));
 
 	return 0;
 }
@@ -449,12 +709,13 @@ static irqreturn_t hse_uio_rx_dispatcher(int irq, void *dev)
 	u32 srv_rsp;
 	int err;
 
+	/* process pending replies, if any */
 	while (channel != HSE_CHANNEL_INV) {
 		/* handle reply */
 		err = hse_uio_msg_recv(dev, channel, &srv_rsp);
 		if (likely(!err)) {
-			drv->intl->reply[channel] = srv_rsp;
-			drv->intl->ready[channel] = 1;
+			drv->intl->channel_reply[channel] = srv_rsp;
+			drv->intl->channel_ready[channel] = 1;
 
 			/* notify upper layer */
 			uio_event_notify(&drv->info);
@@ -467,9 +728,47 @@ static irqreturn_t hse_uio_rx_dispatcher(int irq, void *dev)
 }
 
 /**
+ * hse_srv_req_cancel_all - cancel all requests currently in progress
+ * @dev: HSE UIO device
+ */
+static void hse_srv_req_cancel_all(struct device *dev)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+	u8 channel = hse_uio_next_pending_channel(dev);
+	u32 srv_rsp;
+	int err;
+
+	/* process pending replies, if any */
+	while (channel != HSE_CHANNEL_INV) {
+		/* handle reply */
+		err = hse_uio_msg_recv(dev, channel, &srv_rsp);
+		if (likely(!err)) {
+			drv->intl->channel_reply[channel] = srv_rsp;
+			drv->intl->channel_ready[channel] = 1;
+
+			/* notify upper layer */
+			uio_event_notify(&drv->info);
+		}
+
+		channel = hse_uio_next_pending_channel(dev);
+	}
+
+	/* notify upper layer that all requests are canceled */
+	for (channel = 0; channel < HSE_NUM_CHANNELS; channel++) {
+		if (!drv->intl->channel_busy[channel])
+			continue;
+
+		drv->intl->channel_busy[channel] = false;
+		drv->intl->channel_reply[channel] = HSE_SRV_RSP_CANCELED;
+		drv->intl->channel_ready[channel] = 1;
+		dev_warn(dev, "request canceled, channel %d\n", channel);
+	}
+}
+
+/**
  * hse_uio_evt_dispatcher - deferred handler for HSE_INT_SYS_EVENT interrupts
  * @irq: interrupt line
- * @dev: HSE device
+ * @dev: HSE UIO device
  *
  * In case a fatal error has been reported, all MU interfaces are disabled
  * and communication with HSE terminated. Therefore, all interrupts are
@@ -486,6 +785,9 @@ static irqreturn_t hse_uio_evt_dispatcher(int irq, void *dev)
 
 		return IRQ_HANDLED;
 	}
+
+	/* stop any subsequent requests */
+	drv->intl->firmware_status = HSE_FW_SHUTDOWN;
 
 	/* disable all interrupt sources */
 	hse_uio_irqcontrol(&drv->info, HSE_UIO_DISABLE_ALL_IRQ_CMD);
@@ -509,6 +811,9 @@ static int hse_uio_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct device_node *rmem_node;
 	struct reserved_mem *rmem;
+	unsigned long intl_page;
+	unsigned int channel;
+	char *fw_type;
 	int irq, err;
 	u16 status;
 
@@ -526,21 +831,14 @@ static int hse_uio_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	/* check firmware status */
-	status = hse_uio_check_status(dev);
-	if (unlikely(!status)) {
-		dev_warn(dev, "firmware not found\n");
-		return -ENODEV;
-	}
-
 	/* expose HSE MU register space to upper layer */
 	drv->info.mem[HSE_UIO_MAP_REGS].name = "hse-mu-registers";
 	drv->info.mem[HSE_UIO_MAP_REGS].addr = (phys_addr_t)res->start;
 	drv->info.mem[HSE_UIO_MAP_REGS].size = resource_size(res);
 	drv->info.mem[HSE_UIO_MAP_REGS].memtype = UIO_MEM_PHYS;
 
-	drv->info.version = "1.0";
-	drv->info.name = "hse-uio";
+	drv->info.version = DRIVER_VERSION;
+	drv->info.name = DRIVER_NAME;
 
 	drv->info.open = hse_uio_open;
 	drv->info.release = hse_uio_release;
@@ -564,9 +862,10 @@ static int hse_uio_probe(struct platform_device *pdev)
 	drv->info.mem[HSE_UIO_MAP_DESC].memtype = UIO_MEM_PHYS;
 
 	/* alloc internal shared memory */
-	drv->intl = (void *)devm_get_free_pages(dev, GFP_KERNEL | __GFP_ZERO, 0);
-	if (unlikely(!drv->intl))
+	intl_page = devm_get_free_pages(dev, GFP_KERNEL | __GFP_ZERO, 0);
+	if (unlikely(!intl_page))
 		return -ENOMEM;
+	drv->intl = (void *)intl_page;
 
 	/* expose driver internal memory to upper layer */
 	drv->info.mem[HSE_UIO_MAP_INTL].name = "hse-driver-internal";
@@ -584,6 +883,7 @@ static int hse_uio_probe(struct platform_device *pdev)
 	rmem = of_reserved_mem_lookup(rmem_node);
 	if (!rmem) {
 		dev_err(dev, "reserved memory-region lookup failed\n");
+		of_node_put(rmem_node);
 		return -ENXIO;
 	}
 	of_node_put(rmem_node);
@@ -594,7 +894,8 @@ static int hse_uio_probe(struct platform_device *pdev)
 	drv->info.mem[HSE_UIO_MAP_RMEM].size = rmem->size;
 	drv->info.mem[HSE_UIO_MAP_RMEM].memtype = UIO_MEM_PHYS;
 
-	refcount_set(&drv->refcnt, 1);
+	/* initialize reference counter and lock */
+	atomic_set(&drv->inst_refcnt, 0);
 	spin_lock_init(&drv->reg_lock);
 
 	/* disable all interrupt sources */
@@ -627,8 +928,52 @@ static int hse_uio_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	/* enable RX and system event notifications */
-	hse_uio_irqcontrol(&drv->info, HSE_UIO_ENABLE_ALL_IRQ_CMD);
+	/* reset channels to initial state */
+	for (channel = 0; channel < HSE_NUM_CHANNELS; channel++) {
+		drv->intl->channel_ready[channel] = 0;
+		drv->intl->channel_reply[channel] = 0;
+		drv->intl->channel_busy[channel] = false;
+		drv->intl->channel_res[channel] = false;
+	}
+	drv->intl->setup_done = false;
+	drv->intl->event = 0;
+	drv->intl->channel_res[0] = true; /* restrict channel zero */
+
+	/* check firmware status */
+	status = hse_uio_check_status(dev);
+	if (!likely(status & HSE_STATUS_INIT_OK)) {
+		if (IS_ENABLED(CONFIG_UIO_NXP_HSE_MU0))
+			dev_err(dev, "firmware not found\n");
+		else
+			dev_err(dev, "interface %s not active\n",
+				CONFIG_UIO_NXP_HSE_MU);
+		return -ENODEV;
+	}
+	drv->intl->firmware_status = HSE_FW_RUNNING;
+
+	/* check firmware version */
+	err = hse_uio_check_fw_version(dev);
+	if (likely(!err)) {
+		switch (drv->firmware_version.fw_type) {
+		case HSE_FW_STANDARD:
+			fw_type = "standard";
+			break;
+		case HSE_FW_PREMIUM:
+			fw_type = "premium";
+			break;
+		default:
+			fw_type = "custom";
+			break;
+		}
+
+		dev_info(dev, "%s firmware, version %d.%d.%d\n", fw_type,
+			 drv->firmware_version.major,
+			 drv->firmware_version.minor,
+			 drv->firmware_version.patch);
+	}
+
+	/* enable system event notifications */
+	hse_uio_irqcontrol(&drv->info, HSE_UIO_ENABLE_EVT_IRQ_CMD);
 
 	dev_info(dev, "successfully registered device\n");
 
@@ -639,10 +984,116 @@ static int hse_uio_remove(struct platform_device *pdev)
 {
 	struct hse_uio_drvdata *drv = platform_get_drvdata(pdev);
 
+	/* disable all firmware notifications */
+	hse_uio_irqcontrol(&drv->info, HSE_UIO_DISABLE_ALL_IRQ_CMD);
+
+	/* unregister device */
 	uio_unregister_device(&drv->info);
 
 	return 0;
 }
+
+#ifdef CONFIG_PM_SLEEP
+static int hse_pm_suspend(struct device *dev)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+	u32 msg = lower_32_bits(drv->info.mem[HSE_UIO_MAP_DESC].addr);
+	struct hse_srv_desc srv_desc;
+	int err = 0;
+
+	/* stop subsequent requests */
+	drv->intl->firmware_status = HSE_FW_STANDBY;
+
+	/* disable RX notifications */
+	hse_uio_irq_disable(dev, HSE_INT_RESPONSE, HSE_CH_MASK_ALL);
+
+	/* reserve channel zero */
+	if (unlikely(drv->intl->channel_busy[HSE_CHANNEL_ADM])) {
+		dev_err(dev, "%s: channel %d busy\n", __func__, HSE_CHANNEL_ADM);
+		goto err_enable_irq;
+	}
+	drv->intl->channel_busy[HSE_CHANNEL_ADM] = true;
+
+	/* prepare firmware for stand-by */
+	memzero_explicit(&srv_desc, sizeof(srv_desc));
+	srv_desc.srv_id = HSE_SRV_ID_PREPARE_FOR_STANDBY;
+	memcpy_toio(drv->desc, &srv_desc, sizeof(srv_desc));
+
+	/* send request */
+	err = hse_uio_msg_send(dev, HSE_CHANNEL_ADM, msg);
+	if (unlikely(err)) {
+		dev_err(dev, "%s: send request failed: %d\n", __func__, err);
+		goto err_free_channel;
+	}
+
+	/* wait for response from firmware */
+	while (!hse_uio_msg_pending(dev, HSE_CHANNEL_ADM))
+		;
+
+	/* read reply */
+	err = hse_uio_msg_recv(dev, HSE_CHANNEL_ADM, &msg);
+	if (unlikely(err)) {
+		dev_err(dev, "%s: read reply failed: %d\n", __func__, err);
+		goto err_free_channel;
+	}
+
+	if (unlikely(msg != HSE_SRV_RSP_OK &&
+		     msg != HSE_SRV_RSP_NOT_ALLOWED)) {
+		dev_err(dev, "%s: request failed: 0x%08x\n", __func__, msg);
+		goto err_free_channel;
+	}
+	drv->intl->channel_busy[HSE_CHANNEL_ADM] = false;
+
+	/* cancel other requests */
+	hse_srv_req_cancel_all(dev);
+
+	dev_info(dev, "device ready for stand-by\n");
+
+	return 0;
+err_free_channel:
+	drv->intl->channel_busy[HSE_CHANNEL_ADM] = false;
+err_enable_irq:
+	hse_uio_irq_enable(dev, HSE_INT_RESPONSE, HSE_CH_MASK_ALL);
+	drv->intl->firmware_status = HSE_FW_RUNNING;
+	return err;
+}
+
+static int hse_pm_resume(struct device *dev)
+{
+	struct hse_uio_drvdata *drv = dev_get_drvdata(dev);
+	u16 status;
+	int err;
+
+	if (IS_ENABLED(CONFIG_UIO_NXP_HSE_MU0)) {
+		/* signal firmware not to wait for peripheral configuration */
+		hse_uio_trigger_event(dev, HSE_HOST_PERIPH_CONFIG_DONE);
+	}
+
+	/* enable RX and system event notifications */
+	if (!atomic_read(&drv->inst_refcnt))
+		hse_uio_irqcontrol(&drv->info, HSE_UIO_ENABLE_RX_IRQ_CMD);
+	hse_uio_irqcontrol(&drv->info, HSE_UIO_ENABLE_EVT_IRQ_CMD);
+
+	/* check firmware status */
+	status = hse_uio_check_status(dev);
+	if (!(status & HSE_STATUS_INIT_OK)) {
+		/* wait for firmware init */
+		err = hse_uio_check_fw_version(dev);
+		if (unlikely(err)) {
+			dev_err(dev, "%s: request failed: %d\n", __func__, err);
+			return err;
+		}
+		status = hse_uio_check_status(dev);
+	}
+
+	drv->intl->firmware_status = HSE_FW_RUNNING;
+	dev_info(dev, "device resumed, status 0x%04X\n", status);
+
+	return 0;
+}
+#endif /* CONFIG_PM_SLEEP */
+
+static SIMPLE_DEV_PM_OPS(hse_pm_ops, hse_pm_suspend, hse_pm_resume);
 
 static const struct of_device_id hse_uio_of_match[] = {
 	{
@@ -654,8 +1105,9 @@ MODULE_DEVICE_TABLE(of, hse_uio_of_match);
 
 static struct platform_driver hse_uio_driver = {
 	.driver = {
-		.name = "hse-uio",
+		.name = DRIVER_NAME,
 		.of_match_table	= hse_uio_of_match,
+		.pm = &hse_pm_ops,
 	},
 	.probe = hse_uio_probe,
 	.remove = hse_uio_remove,
@@ -666,3 +1118,4 @@ module_platform_driver(hse_uio_driver);
 MODULE_AUTHOR("NXP");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("NXP HSE UIO Driver");
+MODULE_VERSION(DRIVER_VERSION);

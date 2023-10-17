@@ -671,7 +671,7 @@ static void ata_qc_set_pc_nbytes(struct ata_queued_cmd *qc)
  */
 static void ata_dump_status(unsigned id, struct ata_taskfile *tf)
 {
-	u8 stat = tf->command, err = tf->feature;
+	u8 stat = tf->status, err = tf->error;
 
 	pr_warn("ata%u: status=0x%02x { ", id, stat);
 	if (stat & ATA_BUSY) {
@@ -867,8 +867,8 @@ static void ata_gen_passthru_sense(struct ata_queued_cmd *qc)
 	 * onto sense key, asc & ascq.
 	 */
 	if (qc->err_mask ||
-	    tf->command & (ATA_BUSY | ATA_DF | ATA_ERR | ATA_DRQ)) {
-		ata_to_sense_error(qc->ap->print_id, tf->command, tf->feature,
+	    tf->status & (ATA_BUSY | ATA_DF | ATA_ERR | ATA_DRQ)) {
+		ata_to_sense_error(qc->ap->print_id, tf->status, tf->error,
 				   &sense_key, &asc, &ascq, verbose);
 		ata_scsi_set_sense(qc->dev, cmd, sense_key, asc, ascq);
 	} else {
@@ -897,13 +897,13 @@ static void ata_gen_passthru_sense(struct ata_queued_cmd *qc)
 		 * Copy registers into sense buffer.
 		 */
 		desc[2] = 0x00;
-		desc[3] = tf->feature;	/* == error reg */
+		desc[3] = tf->error;
 		desc[5] = tf->nsect;
 		desc[7] = tf->lbal;
 		desc[9] = tf->lbam;
 		desc[11] = tf->lbah;
 		desc[12] = tf->device;
-		desc[13] = tf->command; /* == status reg */
+		desc[13] = tf->status;
 
 		/*
 		 * Fill in Extend bit, and the high order bytes
@@ -918,8 +918,8 @@ static void ata_gen_passthru_sense(struct ata_queued_cmd *qc)
 		}
 	} else {
 		/* Fixed sense format */
-		desc[0] = tf->feature;
-		desc[1] = tf->command; /* status */
+		desc[0] = tf->error;
+		desc[1] = tf->status;
 		desc[2] = tf->device;
 		desc[3] = tf->nsect;
 		desc[7] = 0;
@@ -968,14 +968,14 @@ static void ata_gen_ata_sense(struct ata_queued_cmd *qc)
 	 * onto sense key, asc & ascq.
 	 */
 	if (qc->err_mask ||
-	    tf->command & (ATA_BUSY | ATA_DF | ATA_ERR | ATA_DRQ)) {
-		ata_to_sense_error(qc->ap->print_id, tf->command, tf->feature,
+	    tf->status & (ATA_BUSY | ATA_DF | ATA_ERR | ATA_DRQ)) {
+		ata_to_sense_error(qc->ap->print_id, tf->status, tf->error,
 				   &sense_key, &asc, &ascq, verbose);
 		ata_scsi_set_sense(dev, cmd, sense_key, asc, ascq);
 	} else {
 		/* Could not decode error */
 		ata_dev_warn(dev, "could not decode error status 0x%x err_mask 0x%x\n",
-			     tf->command, qc->err_mask);
+			     tf->status, qc->err_mask);
 		ata_scsi_set_sense(dev, cmd, ABORTED_COMMAND, 0, 0);
 		return;
 	}
@@ -2490,7 +2490,7 @@ static void atapi_request_sense(struct ata_queued_cmd *qc)
 
 	/* fill these in, for the case where they are -not- overwritten */
 	cmd->sense_buffer[0] = 0x70;
-	cmd->sense_buffer[2] = qc->tf.feature >> 4;
+	cmd->sense_buffer[2] = qc->tf.error >> 4;
 
 	ata_qc_reinit(qc);
 
@@ -2698,17 +2698,35 @@ static unsigned int atapi_xlat(struct ata_queued_cmd *qc)
 	return 0;
 }
 
-static struct ata_device *ata_find_dev(struct ata_port *ap, int devno)
+static struct ata_device *ata_find_dev(struct ata_port *ap, unsigned int devno)
 {
-	if (!sata_pmp_attached(ap)) {
-		if (likely(devno >= 0 &&
-			   devno < ata_link_max_devices(&ap->link)))
+	/*
+	 * For the non-PMP case, ata_link_max_devices() returns 1 (SATA case),
+	 * or 2 (IDE master + slave case). However, the former case includes
+	 * libsas hosted devices which are numbered per scsi host, leading
+	 * to devno potentially being larger than 0 but with each struct
+	 * ata_device having its own struct ata_port and struct ata_link.
+	 * To accommodate these, ignore devno and always use device number 0.
+	 */
+	if (likely(!sata_pmp_attached(ap))) {
+		int link_max_devices = ata_link_max_devices(&ap->link);
+
+		if (link_max_devices == 1)
+			return &ap->link.device[0];
+
+		if (devno < link_max_devices)
 			return &ap->link.device[devno];
-	} else {
-		if (likely(devno >= 0 &&
-			   devno < ap->nr_pmp_links))
-			return &ap->pmp_link[devno].device[0];
+
+		return NULL;
 	}
+
+	/*
+	 * For PMP-attached devices, the device number corresponds to C
+	 * (channel) of SCSI [H:C:I:L], indicating the port pmp link
+	 * for the device.
+	 */
+	if (devno < ap->nr_pmp_links)
+		return &ap->pmp_link[devno].device[0];
 
 	return NULL;
 }
