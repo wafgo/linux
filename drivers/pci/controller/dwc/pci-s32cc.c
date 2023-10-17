@@ -239,7 +239,7 @@ static irqreturn_t s32cc_pcie_dma_handler(int irq, void *arg)
 #ifdef CONFIG_PCI_EPF_TEST
 			else if (rcmp)
 			    complete(rcmp);
-
+#endif
 		dma_error = dw_handle_dma_irq_read(di, val_read);
 		if (dma_error != DMA_ERR_NONE)
 			dev_info(s32cc_pp->pcie.dev, "dma read error 0x%0x.\n",
