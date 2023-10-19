@@ -609,7 +609,7 @@ static bool pci_endpoint_test_read(struct pci_endpoint_test *test,
 	struct pci_endpoint_test_xfer_param param;
 	bool ret = false;
 	u32 flags = 0;
-	bool use_dma;
+	bool use_dma, use_single_dma;
 	size_t size;
 	void *addr;
 	dma_addr_t phys_addr;
