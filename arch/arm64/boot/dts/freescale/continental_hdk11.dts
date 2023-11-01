@@ -1246,15 +1246,6 @@
 	/* }; */
 	
 &gpio {
-
-	/*FIXME, this holds the BASEBOARD always on, remove it after tests*/
-	SAFELOCK_SMH_SI {
-		gpio-hog;
-		gpios = <45 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "SAFELOCK_SMH_SI";
-	};
-	
 	N_PERST_SMH_P0_PCIE_SW {
 		gpio-hog;
 		gpios = <81 GPIO_ACTIVE_HIGH>;
@@ -1274,27 +1265,6 @@
 		gpios = <83 GPIO_ACTIVE_HIGH>;
 		output-high;
 		line-name = "N_PWDNB_DES_3";
-	};
-
-	ADC_MUX_IN1 {
-		gpio-hog;
-		gpios = <113 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "ADC_MUX_IN1";
-	};
-
-	ADC_MUX_IN2 {
-		gpio-hog;
-		gpios = <114 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "ADC_MUX_IN2";
-	};
-
-	ADC_MUX_IN3 {
-		gpio-hog;
-		gpios = <144 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "ADC_MUX_IN3";
 	};
 
 	N_RESET_SMH_SOM2_MMH {
