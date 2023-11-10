@@ -10,12 +10,12 @@
 		spi-tx-bus-width = <8>;
 		spi-rx-bus-width = <8>;
 		reg = <0>;
-		
-		partitions {
+
+				partitions {
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			
+
 			flashimage@0 {
 				label = "Flash-Image";
 				reg = <0x0 0x8000000>;
@@ -36,14 +36,9 @@
 				reg = <0x800000 0x100000>;
 			};
 
-			kernel@900000 {
+			kernel@d00000 {
 				label = "Kernel";
-				reg = <0x900000 0xF00000>;
-			};
-
-			dtb@1700000 {
-				label = "DTB";
-				reg = <0x1800000 0x100000>;
+				reg = <0xD00000 0x1000000>;
 			};
 
 			boot-env@1800000 {
@@ -51,15 +46,19 @@
 				reg = <0x1900000 0x10000>;
 			};
 
-			fip@1810000 {
-				label = "FIP";
-				reg = <0x1910000 0x300000>;
+			dtb@5e40000 {
+				label = "DTB";
+				reg = <0x5e40000 0x10000>;
 			};
-						
 
-			rootfs@5e40000 {
+			fip@5e50000 {
+				label = "FIP";
+				reg = <0x5e50000 0x200000>;
+			};			
+
+			rootfs@6050000 {
 				label = "Rootfs";
-				reg = <0x5e40000 0x21C0000>;
+				reg = <0x6050000 0x1fb0000>;
 			};
 		};
 	};
