@@ -56,10 +56,11 @@
 				reg = <0x6250000 0x200000>;
 			};			
 
-			rootfs@6450000 {
-				label = "Rootfs";
-				reg = <0x6450000 0x1fb0000>;
+			kernel@6450000 {
+				label = "Kernel";
+				reg = <0x6450000 0x1800000>;
 			};
+
 		};
 	};
 };
