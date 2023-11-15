@@ -36,11 +36,6 @@
 				reg = <0x800000 0x100000>;
 			};
 
-			kernel@d00000 {
-				label = "Kernel";
-				reg = <0xD00000 0x1000000>;
-			};
-
 			boot-env@1800000 {
 				label = "U-Boot-Env";
 				reg = <0x1900000 0x10000>;
