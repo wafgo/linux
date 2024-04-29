@@ -32,6 +32,8 @@
 
 #include "mailbox.h"
 
+#define LLCE_SYSRSTR			0x0
+
 #define MAX_FILTER_PER_CHAN		(16u)
 #define FIFO_MB_PER_CHAN		(100u)
 #define MAX_CONFIRM_BUF_PER_CHAN	(16u)
@@ -87,6 +89,21 @@
 
 #define LLCE_DELAY_US		(1000)
 
+#define LLCE_LPSPI_NR		(4)
+#define LLCE_LPSPI_CHANNEL0	(0)
+
+/* LLCE Mailbox is an interrupt controller for LPSPI and LinflexD.
+ * First LLCE_LINFLEX_NR interrupts are used for LinflexD instances
+ * and next LLCE_LPSPI_NR interrupts are used for LPSPI instances.
+ */
+/* Get LinflexD/LPSPI instance corresponding to hw_irq. */
+#define LLCE_IRQ_TO_LIN_HWCTRL(hw_irq)		(hw_irq)
+#define LLCE_IRQ_TO_LPSPI_HWCTRL(hw_irq)	((hw_irq) - LLCE_LINFLEX_NR)
+
+/* Get hw_irq corresponding to LinflexD/LPSPI instance. */
+#define LLCE_LIN_HWTCRL_TO_IRQ(hw_irq)		(hw_irq)
+#define LLCE_LPSPI_HWCTRL_TO_IRQ(hw_irq)	((hw_irq) + LLCE_LINFLEX_NR)
+
 struct llce_icsr {
 	u8 icsr0_num;
 	u8 icsr8_num;
@@ -129,6 +146,8 @@ struct llce_mb {
 	spinlock_t txack_lock;
 	/* spinlock used to protect linflex interrupts related registers. */
 	spinlock_t lin_lock;
+	/* spinlock used to protect lpspi interrupts related registers. */
+	spinlock_t lpspi_lock;
 
 	struct llce_can_shared_memory __iomem *can_sh_mem;
 	struct llce_lin_shared_memory __iomem *lin_sh_mem;
@@ -141,6 +160,7 @@ struct llce_mb {
 	void __iomem *icsr;
 	void __iomem *sema42;
 	void __iomem *core2core;
+	void __iomem *system_ctrl;
 	struct llce_can_rx_tx_count __iomem *can_stats;
 	struct clk *clk;
 	struct device *dev;
@@ -151,6 +171,7 @@ struct llce_mb {
 	bool multihif;
 	bool suspended;
 	bool lin_irq_enabled;
+	bool lpspi_irq_enabled;
 	bool fw_logger_support;
 	struct irq_chip irq_chip;
 	struct irq_domain *domain;
@@ -555,11 +576,6 @@ static struct mbox_chan *llce_mb_xlate(struct mbox_controller *mbox,
 	}
 
 	off = get_channel_offset(type, index);
-	if (off >= mbox->num_chans) {
-		dev_err(dev, "Out of bounds access\n");
-		return ERR_PTR(-EINVAL);
-	}
-
 	chan = &mbox->chans[off];
 	ret = init_chan_priv(chan, mb, type, index);
 	if (ret)
@@ -1286,8 +1302,13 @@ static void llce_mbox_chan_received_data(struct mbox_chan *chan, void *msg)
 	struct llce_chan_priv *priv = chan->con_priv;
 
 	if (!is_chan_registered(chan)) {
-		dev_err(chan->mbox->dev, "Received a message on an unregistered channel (type: %s, index: %u)\n",
-			get_channel_type_name(priv->type), priv->index);
+		if (!priv)
+			dev_err(chan->mbox->dev,
+				"Received a message on an unregistered channel\n");
+		else
+			dev_err(chan->mbox->dev,
+				"Received a message on an unregistered channel (type: %s, index: %u)\n",
+				get_channel_type_name(priv->type), priv->index);
 		return;
 	}
 
@@ -1476,6 +1497,7 @@ static void llce_process_tx_ack(struct llce_mb *mb, u8 index)
 	struct llce_can_shared_memory __iomem *can_sh_mem = mb->can_sh_mem;
 	struct llce_can_tx2host_ack_info __iomem *info;
 	struct llce_tx_notif notif;
+	struct device *dev = mb->controller.dev;
 	u32 ack_id;
 	u16 frame_tag1;
 	unsigned int chan_index;
@@ -1487,15 +1509,30 @@ static void llce_process_tx_ack(struct llce_mb *mb, u8 index)
 		info = &can_sh_mem->can_tx_ack_info[ack_id];
 		memcpy_fromio(&frame_tag1, &info->frame_tag1,
 			      sizeof(frame_tag1));
+
+		if (frame_tag1 >= get_channels_for_type(S32G_LLCE_CAN_TX_MB)) {
+			dev_err(dev,
+				"%u exceeds the number of allocated channels for type : %d\n",
+				frame_tag1, S32G_LLCE_CAN_TX_MB);
+			continue;
+		}
+
 		chan_index = get_channel_offset(S32G_LLCE_CAN_TX_MB,
 						frame_tag1);
+		if (!is_chan_registered(&ctrl->chans[chan_index])) {
+			dev_err(dev,
+				"Received a TX ACK message on an unregistered channel (type: %s, index: %u)\n",
+				get_channel_type_name(S32G_LLCE_CAN_TX_MB),
+				frame_tag1);
+			continue;
+		}
 		notif.error = 0;
 		memcpy_fromio(&notif.tx_timestamp,
 			      &info->tx_timestamp,
 			      sizeof(notif.tx_timestamp));
 
 		/* Notify the client and send the timestamp */
-		llce_mbox_chan_received_data(&ctrl->chans[chan_index], &notif);
+		mbox_chan_received_data(&ctrl->chans[chan_index], &notif);
 		mbox_chan_txdone(&ctrl->chans[chan_index], 0);
 	}
 
@@ -1548,7 +1585,7 @@ static void process_chan_err(struct llce_mb *mb, u32 chan_type,
 		notif = &rx_notif;
 	}
 
-	llce_mbox_chan_received_data(chan, notif);
+	mbox_chan_received_data(chan, notif);
 }
 
 static void process_channel_err(struct llce_mb *mb,
@@ -1792,7 +1829,7 @@ static void push_rxout_and_notif(struct llce_mb *mb, u8 hw_ctrl,
 	if (chan->con_priv && is_chan_registered(chan)) {
 		push_llce_rx_data(chan, &msg->rx_pop.mb,
 				  msg->rx_pop.index);
-		llce_mbox_chan_received_data(chan, &notif_msg);
+		mbox_chan_received_data(chan, &notif_msg);
 	} else {
 		/* Release the index if there are no clients to process it */
 		release_rxout_index(mb, msg->rx_pop.index);
@@ -1890,7 +1927,7 @@ static void send_llce_logger_notif(struct llce_mb *mb, u32 hw_ctrl,
 	chan = &ctrl->chans[chan_index];
 	if (chan->con_priv && is_chan_registered(chan)) {
 		push_llce_rx_data(chan, &can_mb, mb_index);
-		llce_mbox_chan_received_data(chan, &msg);
+		mbox_chan_received_data(chan, &msg);
 	} else {
 		/* Release the index if there are no clients to process it */
 		release_logger_index(mb, mb_index);
@@ -2277,7 +2314,7 @@ static irqreturn_t llce_mb_lin_handler(int irq, void *data)
 	for (i = 0; i < LLCE_LINFLEX_NR; i++) {
 		if (!(hintc2r_val & BIT(i)))
 			continue;
-		virq = irq_find_mapping(mb->domain, i);
+		virq = irq_find_mapping(mb->domain, LLCE_LIN_HWTCRL_TO_IRQ(i));
 		if (!virq)
 			continue;
 
@@ -2290,41 +2327,224 @@ static irqreturn_t llce_mb_lin_handler(int irq, void *data)
 	return ret;
 }
 
-static void llce_mb_irq_mask(struct irq_data *data)
+static void llce_mb_lin_irq_mask(struct irq_data *data)
 {
 	struct llce_mb *mb = data->chip_data;
-	u8 hw_ctrl = (u8) data->hwirq;
+	u8 hw_ctrl = (u8)LLCE_IRQ_TO_LIN_HWCTRL(data->hwirq);
 
 	host2tx_disable_interrupt(mb, hw_ctrl);
 	host2tx_clear_interrupt(mb, hw_ctrl);
 }
 
-static void llce_mb_irq_unmask(struct irq_data *data)
+static void llce_mb_lin_irq_unmask(struct irq_data *data)
 {
 	struct llce_mb *mb = data->chip_data;
-	u8 hw_ctrl = (u8)data->hwirq;
+	u8 hw_ctrl = (u8)LLCE_IRQ_TO_LIN_HWCTRL(data->hwirq);
 
 	host2tx_enable_interrupt(mb, hw_ctrl);
 }
 
-static struct irq_chip llce_mb_irq_chip = {
+static struct irq_chip llce_mb_lin_irq_chip = {
 	.name = "llce",
-	.irq_mask = llce_mb_irq_mask,
-	.irq_unmask = llce_mb_irq_unmask,
+	.irq_mask = llce_mb_lin_irq_mask,
+	.irq_unmask = llce_mb_lin_irq_unmask,
 };
+
+/* Enable interrupts from rx core to host core for a specific channel.*/
+static void rx2host_enable_interrupt(struct llce_mb *mb, u32 hw_ctrl)
+{
+	void __iomem *hintc1er = LLCE_CORE2CORE_HINTC1ER(mb->core2core);
+	u32 hintc1er_val;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mb->lpspi_lock, flags);
+
+	hintc1er_val = readl(hintc1er);
+	writel(hintc1er_val | BIT(hw_ctrl), hintc1er);
+
+	spin_unlock_irqrestore(&mb->lpspi_lock, flags);
+}
+
+/* Disable interrupts from rx core to host core for a specific channel.*/
+static void rx2host_disable_interrupt(struct llce_mb *mb, u32 hw_ctrl)
+{
+	void __iomem *hintc1er = LLCE_CORE2CORE_HINTC1ER(mb->core2core);
+	u32 hintc1er_val;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mb->lpspi_lock, flags);
+
+	hintc1er_val = readl(hintc1er);
+	writel(hintc1er_val & (~(BIT(hw_ctrl))), hintc1er);
+
+	spin_unlock_irqrestore(&mb->lpspi_lock, flags);
+}
+
+/* Clear existing interrupts from rx core for a specific channel.*/
+static void rx2host_clear_interrupt(struct llce_mb *mb, u32 hw_ctrl)
+{
+	void __iomem *hintc1r = LLCE_CORE2CORE_HINTC1R(mb->core2core);
+	unsigned long flags;
+
+	spin_lock_irqsave(&mb->lpspi_lock, flags);
+
+	writel(BIT(hw_ctrl), hintc1r);
+
+	spin_unlock_irqrestore(&mb->lpspi_lock, flags);
+}
+
+static void rx2host_assert_interrupt(struct llce_mb *mb, u32 hw_ctrl)
+{
+	void __iomem *c1inthr = LLCE_CORE2CORE_C1INTHR(mb->core2core);
+	u32 c1inthr_val;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mb->lpspi_lock, flags);
+
+	c1inthr_val = readl(c1inthr);
+	writel(c1inthr_val | BIT(hw_ctrl), c1inthr);
+
+	spin_unlock_irqrestore(&mb->lpspi_lock, flags);
+}
+
+static u32 rx2host_get_interrupts_status(struct llce_mb *mb)
+{
+	void __iomem *c1inthr = LLCE_CORE2CORE_C1INTHR(mb->core2core);
+	u32 c1inthr_val;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mb->lpspi_lock, flags);
+	c1inthr_val = readl(c1inthr);
+	spin_unlock_irqrestore(&mb->lpspi_lock, flags);
+
+	return c1inthr_val;
+}
+
+static int lpspi_init(struct llce_mb *mb)
+{
+	struct mbox_controller *ctrl = &mb->controller;
+	struct device *dev = ctrl->dev;
+	u8 retries = 10, hw_ctrl = LLCE_LPSPI_CHANNEL0;
+	int ret;
+	u32 val, i;
+
+	/* Interrupt forwarding should be enabled only once. */
+	if (mb->lpspi_irq_enabled)
+		return 0;
+
+	/* Enable interrupts for LPSI channels. */
+	for (i = 0; i < LLCE_LPSPI_NR; i++) {
+		rx2host_disable_interrupt(mb, i);
+		rx2host_clear_interrupt(mb, i);
+		rx2host_enable_interrupt(mb, i);
+	}
+
+	/* Trigger an interrupt using CORE2CORE module
+	 * on the corresponding bit of the command.
+	 */
+	rx2host_assert_interrupt(mb, hw_ctrl);
+
+	/* Wait for command completion.
+	 * The command is completed when core 1 clears interrupt bit
+	 * for LPSPI interface 0.
+	 */
+	ret = readx_poll_timeout(rx2host_get_interrupts_status, mb, val,
+				 !(val & BIT(hw_ctrl)),
+				 LLCE_DELAY_US, LLCE_DELAY_US * retries);
+
+	if (ret < 0) {
+		dev_err(dev, "LLCE LPSPI interrupt forwarding timeout\n");
+		return ret;
+	}
+
+	mb->lpspi_irq_enabled = true;
+
+	return 0;
+}
+
+static irqreturn_t llce_mb_lspi_handler(int irq, void *data)
+{
+	struct llce_mb *mb = data;
+	void __iomem *hintc1r = LLCE_CORE2CORE_HINTC1R(mb->core2core);
+	u32 i, hintc1r_val;
+	unsigned int virq;
+	unsigned long wa_lock_flags;
+	irqreturn_t ret = IRQ_NONE;
+
+	hintc1r_val = readl(hintc1r);
+	for (i = 0; i < LLCE_LPSPI_NR; i++) {
+		if (!(hintc1r_val & BIT(i)))
+			continue;
+		virq = irq_find_mapping(mb->domain, LLCE_LPSPI_HWCTRL_TO_IRQ(i));
+		if (!virq)
+			continue;
+
+		raw_spin_lock_irqsave(&mb->wa_lock, wa_lock_flags);
+		generic_handle_irq(virq);
+		raw_spin_unlock_irqrestore(&mb->wa_lock, wa_lock_flags);
+		ret |= IRQ_HANDLED;
+	}
+
+	return ret;
+}
+
+static void llce_mb_lpspi_irq_mask(struct irq_data *data)
+{
+	struct llce_mb *mb = data->chip_data;
+	u8 hw_ctrl = (u8)LLCE_IRQ_TO_LPSPI_HWCTRL(data->hwirq);
+
+	rx2host_disable_interrupt(mb, hw_ctrl);
+	rx2host_clear_interrupt(mb, hw_ctrl);
+}
+
+static void llce_mb_lpspi_irq_unmask(struct irq_data *data)
+{
+	struct llce_mb *mb = data->chip_data;
+	u8 hw_ctrl = (u8)LLCE_IRQ_TO_LPSPI_HWCTRL(data->hwirq);
+
+	rx2host_enable_interrupt(mb, hw_ctrl);
+}
+
+static struct irq_chip llce_mb_lpspi_irq_chip = {
+	.name = "llce",
+	.irq_mask = llce_mb_lpspi_irq_mask,
+	.irq_unmask = llce_mb_lpspi_irq_unmask,
+};
+
+static inline bool is_lin_irq(unsigned int hw_irq)
+{
+	return hw_irq < LLCE_LINFLEX_NR;
+}
+static inline bool is_lpspi_irq(unsigned int hw_irq)
+{
+	return hw_irq >= LLCE_LINFLEX_NR &&
+		hw_irq  < LLCE_LINFLEX_NR + LLCE_LPSPI_NR;
+}
 
 static int llce_mb_irq_map(struct irq_domain *d,
 			 unsigned int irq,
-			 irq_hw_number_t hw)
+			 irq_hw_number_t hw_irq)
 {
 	struct llce_mb *mb = d->host_data;
 	int ret;
 
-	ret = lin_init(mb);
-	if (ret)
-		return ret;
+	if (is_lin_irq(hw_irq)) {
+		ret = lin_init(mb);
+		if (ret)
+			return ret;
+		irq_set_chip_and_handler(irq, &llce_mb_lin_irq_chip,
+					 handle_level_irq);
+	} else if (is_lpspi_irq(hw_irq)) {
+		ret = lpspi_init(mb);
+		if (ret)
+			return ret;
+		irq_set_chip_and_handler(irq, &llce_mb_lpspi_irq_chip,
+					 handle_level_irq);
 
-	irq_set_chip_and_handler(irq, &llce_mb_irq_chip, handle_level_irq);
+	} else
+		/* Should not be get here. */
+		return -EINVAL;
+
 	irq_set_chip_data(irq, mb);
 	irq_set_noprobe(irq);
 
@@ -2336,54 +2556,36 @@ static const struct irq_domain_ops llce_mb_irq_ops = {
 	.xlate = irq_domain_xlate_onecell,
 };
 
-static int init_llce_lin_irq(struct platform_device *pdev,
-				   struct llce_mb *mb)
+static int init_llce_irq(struct platform_device *pdev,
+				   struct llce_mb *mb, const char *irq_name,
+				   irq_handler_t handler)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
-	int irq, ret;
+	int irq;
 
-	if (!of_find_property(np, "interrupt-controller", NULL)) {
-		dev_err(dev, "Not an interrupt-controller\n");
-		return -ENXIO;
-	}
-
-	irq = platform_get_irq_byname(pdev, "linflex_irq");
+	irq = platform_get_irq_byname(pdev, irq_name);
 	if (irq < 0) {
-		dev_err(dev, "linflex_irq not found\n");
+		dev_err(dev, "%s not found\n", irq_name);
 		return irq;
 	}
 
-	mb->domain = irq_domain_add_linear(dev->of_node, LLCE_LINFLEX_NR,
-			&llce_mb_irq_ops, mb);
-
-	if (!mb->domain) {
-		dev_err(dev, "Failed to add irq_domain\n");
-		return -ENOMEM;
-	}
-
-	ret = devm_request_irq(dev, irq, llce_mb_lin_handler, 0,
-			       "llce_mb", (void *)mb);
-	if (ret) {
-		dev_err(dev, "Failed to request interrupt err = %d\n", ret);
-		irq_domain_remove(mb->domain);
-		return ret;
-	}
-
-	return 0;
+	return devm_request_irq(dev, irq, handler, 0,
+			       irq_name, (void *)mb);
 }
 
-static void deinit_llce_lin_irq(struct llce_mb *mb)
+static void deinit_llce_interrupt_ctrl(struct llce_mb *mb)
 {
-	irq_domain_remove(mb->domain);
+	if (mb->domain)
+		irq_domain_remove(mb->domain);
 }
 
 static int init_llce_irq_resources(struct platform_device *pdev,
 				   struct llce_mb *mb)
 {
-	int irq;
+	int irq, ret;
 	size_t i;
 	struct device *dev = &pdev->dev;
+	struct device_node *np = dev->of_node;
 	struct llce_fifoirq *fifo_irq;
 	struct {
 		const char *name;
@@ -2427,6 +2629,20 @@ static int init_llce_irq_resources(struct platform_device *pdev,
 		},
 	};
 
+	struct {
+		const char *name;
+		irq_handler_t handler;
+	} resources_ic[] = {
+		{
+			.name = "linflex_irq",
+			.handler = llce_mb_lin_handler,
+		},
+		{
+			.name = "lpspi_irq",
+			.handler = llce_mb_lspi_handler,
+		},
+	};
+
 	for (i = 0; i < ARRAY_SIZE(resources); i++) {
 		irq = platform_get_irq_byname(pdev, resources[i].name);
 		if (irq < 0) {
@@ -2439,6 +2655,30 @@ static int init_llce_irq_resources(struct platform_device *pdev,
 		fifo_irq->name = resources[i].name;
 		fifo_irq->handler = resources[i].handler;
 		fifo_irq->num = irq;
+	}
+
+	if (!of_find_property(np, "interrupt-controller", NULL)) {
+		dev_err(dev, "Not an interrupt-controller\n");
+		return -ENXIO;
+	}
+
+	mb->domain = irq_domain_add_linear(np, LLCE_LINFLEX_NR + LLCE_LPSPI_NR,
+					   &llce_mb_irq_ops, mb);
+
+	if (!mb->domain) {
+		dev_err(dev, "Failed to add irq_domain\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(resources_ic); i++) {
+		ret = init_llce_irq(pdev, mb, resources_ic[i].name,
+				    resources_ic[i].handler);
+		if (ret) {
+			dev_err(dev, "Failed to request interrupt err = %d\n",
+				ret);
+			irq_domain_remove(mb->domain);
+			return ret;
+		}
 	}
 
 	return 0;
@@ -2463,6 +2703,7 @@ static int init_llce_mem_resources(struct platform_device *pdev,
 		{ .res_name = "icsr", .vaddr = &mb->icsr, },
 		{ .res_name = "sema42", .vaddr = &mb->sema42, },
 		{ .res_name = "core2core", .vaddr = &mb->core2core, },
+		{ .res_name = "system_control", .vaddr = &mb->system_ctrl, },
 	};
 
 	for (i = 0; i < ARRAY_SIZE(resources); i++) {
@@ -2594,7 +2835,7 @@ static unsigned long get_next_free_fifo(unsigned long *availability,
 	if (!*availability)
 		*availability = get_fifo_mask(hif, multihost);
 
-	index = find_last_bit(availability, LLCE_NFIFO_WITH_IRQ);
+	index = find_first_bit(availability, LLCE_NFIFO_WITH_IRQ);
 	*availability &= ~BIT(index);
 
 	return index;
@@ -2927,6 +3168,7 @@ static int llce_mb_probe(struct platform_device *pdev)
 	struct llce_mb *mb;
 	struct device *dev = &pdev->dev;
 	int ret;
+	u32 sysrstr;
 
 	mb = devm_kzalloc(&pdev->dev, sizeof(*mb), GFP_KERNEL);
 	if (!mb)
@@ -2969,21 +3211,25 @@ static int llce_mb_probe(struct platform_device *pdev)
 
 	ret = map_llce_shmem(mb);
 	if (ret)
-		return ret;
-
-	ret = init_llce_lin_irq(pdev, mb);
-	if (ret)
-		return ret;
+		goto interrupt_ctrl_deinit;
 
 	ret = init_hif_config_chan(mb);
 	if (ret) {
 		dev_err(dev, "Failed to initialize HIF config channel\n");
-		goto lin_irq_deinit;
+		goto interrupt_ctrl_deinit;
 	}
 
 	ret = init_core_clock(dev, &mb->clk);
 	if (ret)
 		goto hif_deinit;
+
+	sysrstr = readl(mb->system_ctrl + LLCE_SYSRSTR);
+	/* If LLCE modules are under reset, the firmware was not loaded. */
+	if (!sysrstr) {
+		dev_err(dev, "LLCE modules are under reset. Is the LLCE firmware loaded?\n");
+		ret = -EACCES;
+		goto hif_deinit;
+	}
 
 	ret = get_fw_version(mb, &ver);
 	if (ret) {
@@ -3020,9 +3266,9 @@ hif_deinit:
 	if (ret)
 		deinit_hif_config_chan(mb);
 
-lin_irq_deinit:
+interrupt_ctrl_deinit:
 	if (ret)
-		deinit_llce_lin_irq(mb);
+		deinit_llce_interrupt_ctrl(mb);
 
 	return ret;
 }
@@ -3041,6 +3287,7 @@ static int llce_mb_remove(struct platform_device *pdev)
 
 	deinit_core_clock(mb->clk);
 	deinit_hif_config_chan(mb);
+	deinit_llce_interrupt_ctrl(mb);
 
 	return 0;
 }
@@ -3080,6 +3327,14 @@ static int __maybe_unused llce_mb_resume(struct device *dev)
 	if (mb->lin_irq_enabled) {
 		mb->lin_irq_enabled = false;
 		ret = lin_init(mb);
+		if (ret)
+			return ret;
+	}
+
+	/* Force lpspi intterupt forwarding again. */
+	if (mb->lpspi_irq_enabled) {
+		mb->lpspi_irq_enabled = false;
+		ret = lpspi_init(mb);
 		if (ret)
 			return ret;
 	}

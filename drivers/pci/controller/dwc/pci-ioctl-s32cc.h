@@ -3,7 +3,7 @@
  * Copyright (C) 2013 Kosagi
  *              http://www.kosagi.com
  * Copyright (C) 2014-2015 Freescale Semiconductor, Inc. All Rights Reserved.
- * Copyright 2016-2022 NXP
+ * Copyright 2016-2023 NXP
  *
  * Author: Sean Cross <xobs@kosagi.com>
  *
@@ -20,26 +20,26 @@
 
 #define SETUP_OUTBOUND		_IOWR('S', 1, struct s32cc_outbound_region)
 #define SETUP_INBOUND		_IOWR('S', 2, struct s32cc_inbound_region)
-#define SEND_MSI			_IOWR('S', 3, unsigned long long)
+#define SEND_MSI		_IOWR('S', 3, unsigned long long)
 #define GET_BAR_INFO		_IOWR('S', 4, struct s32cc_bar)
 #define SEND_SINGLE_DMA		_IOWR('S', 6, struct dma_data_elem)
-#define STORE_PID			_IOR('S', 7, unsigned int)
-#define SEND_SIGNAL			_IOR('S', 8,  unsigned int)
+#define STORE_PID		_IOR('S', 7, unsigned int)
+#define SEND_SIGNAL		_IOR('S', 8,  unsigned int)
 #define GET_DMA_CH_ERRORS	_IOR('S', 9,  unsigned int)
 #define RESET_DMA_WRITE		_IOW('S', 10,  unsigned int)
 #define RESET_DMA_READ		_IOW('S', 11,  unsigned int)
 
 struct s32cc_inbound_region {
-#ifndef CONFIG_PCI_S32CC_IOCTL_LIMIT_ONE_ENDPOINT
+#if (!IS_ENABLED(CONFIG_PCI_S32CC_IOCTL_LIMIT_ONE_ENDPOINT))
 	int pcie_id; /* must match the id of a device tree pcie node */
 #endif
-	u32 bar_nr;
+	u32 bar_nr; /* for backwards compatibility; should be 0 */
 	u32 target_addr;
-	u32 region; /* for backwards compatibility */
+	u32 region; /* for backwards compatibility; not used */
 };
 
 struct s32cc_outbound_region {
-#ifndef CONFIG_PCI_S32CC_IOCTL_LIMIT_ONE_ENDPOINT
+#if (!IS_ENABLED(CONFIG_PCI_S32CC_IOCTL_LIMIT_ONE_ENDPOINT))
 	int pcie_id; /* must match the id of a device tree pcie node */
 #endif
 	u64 target_addr;
@@ -57,8 +57,6 @@ struct s32cc_bar {
 	u32 size;
 	u32 addr;
 };
-
-struct s32cc_userspace_info;
 
 struct s32cc_userspace_info {
 	struct dentry		*dir;
@@ -81,8 +79,5 @@ int s32cc_pcie_setup_outbound(struct s32cc_outbound_region *outbStr);
 int s32cc_pcie_setup_inbound(struct s32cc_inbound_region *inbStr);
 
 int s32cc_send_msi(struct dw_pcie *pcie);
-
-void s32cc_register_callback(struct dw_pcie *pcie,
-	void (*call_back)(u32 arg));
 
 #endif /* PCI_IOCTL_S32CC_H */

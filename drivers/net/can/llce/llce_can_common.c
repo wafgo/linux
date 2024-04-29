@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause
-/* Copyright 2021-2023 NXP */
+/* Copyright 2021-2024 NXP */
 #include <linux/can/dev.h>
 #include <linux/can/dev/llce_can_common.h>
 #include <linux/ctype.h>
@@ -122,10 +122,11 @@ static const struct llce_error llce_errors[] = {
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_NO_MB_TO_ABORT),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_INDEX_NOT_RECOVERED),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_RESET_PENDING),
-	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_CODE_RESERVED_18),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_FATAL),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_TXWRN),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_RXWRN),
 	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_BCAN_PASSERR),
+	LLCE_CAN_ERROR_ENTRY(LLCE_ERROR_ROUTINGCHANNEL_DISABLED),
 };
 
 static int get_llce_can_id(const char *node_name, int *id)
@@ -371,17 +372,22 @@ void process_llce_can_error(struct llce_can_dev *llce,
 			    enum llce_can_module module)
 {
 	struct can_frame *cf;
+	struct can_priv can = llce->can;
 	struct can_device_stats *can_stats = &llce->can.can_stats;
 	struct net_device_stats *net_stats = &llce->can.dev->stats;
-	struct sk_buff *skb = alloc_can_err_skb(llce->can.dev, &cf);
 	struct net_device *dev = llce->can.dev;
+	struct sk_buff *skb;
 
+	llce->stats[error - LLCE_ERROR_TXACK_FIFO_FULL]++;
+
+	if (!(can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING))
+		return;
+
+	skb = alloc_can_err_skb(llce->can.dev, &cf);
 	if (!skb) {
 		netdev_dbg(llce->can.dev, "Could not allocate error frame\n");
 		return;
 	}
-
-	llce->stats[error - LLCE_ERROR_TXACK_FIFO_FULL]++;
 
 	if (module == LLCE_TX)
 		net_stats->tx_errors++;

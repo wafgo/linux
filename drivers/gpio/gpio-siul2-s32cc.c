@@ -3,7 +3,7 @@
  * SIUL2 GPIO support.
  *
  * Copyright (c) 2016 Freescale Semiconductor, Inc.
- * Copyright 2019-2022 NXP
+ * Copyright 2019-2024 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 or
@@ -157,6 +157,7 @@ struct siul2_gpio_dev {
 
 	/* Mutual access to SIUL2 registers. */
 	spinlock_t lock;
+	raw_spinlock_t wa_lock;
 };
 
 /* We will use the following variable names:
@@ -418,6 +419,7 @@ static irqreturn_t siul2_gpio_irq_handler(int irq, void *data)
 	u32 disr0_val;
 	unsigned long disr0_val_long;
 	irqreturn_t ret = IRQ_NONE;
+	unsigned long wa_lock_flags;
 	int i;
 
 	/* Go through the entire GPIO bank and handle all interrupts */
@@ -452,7 +454,9 @@ static irqreturn_t siul2_gpio_irq_handler(int irq, void *data)
 		 */
 		regmap_write(gpio_dev->irqmap, SIUL2_DISR0, BIT(eirq));
 
+		raw_spin_lock_irqsave(&gpio_dev->wa_lock, wa_lock_flags);
 		generic_handle_irq(child_irq);
+		raw_spin_unlock_irqrestore(&gpio_dev->wa_lock, wa_lock_flags);
 
 		ret |= IRQ_HANDLED;
 	}
@@ -531,8 +535,9 @@ static void siul2_gpio_irq_mask(struct irq_data *data)
 	/* Disable interrupt */
 	regmap_update_bits(gpio_dev->irqmap, SIUL2_DIRER0, mask, 0);
 
-	/* Clean status flag */
-	regmap_update_bits(gpio_dev->irqmap, SIUL2_DISR0, mask, mask);
+	/* Clear interrupt edge settings */
+	regmap_update_bits(gpio_dev->irqmap, SIUL2_IREER0, mask, 0);
+	regmap_update_bits(gpio_dev->irqmap, SIUL2_IFEER0, mask, 0);
 
 	spin_lock_irqsave(&gpio_dev->lock, flags);
 	bitmap_clear(&gpio_dev->eirqs_bitmap, platdata->irqs[index].eirq, 1);
@@ -543,6 +548,10 @@ static void siul2_gpio_irq_mask(struct irq_data *data)
 		     0);
 
 	siul2_gpio_free(gc, gpio);
+
+	/* Clean status flag */
+	regmap_update_bits(gpio_dev->irqmap, SIUL2_DISR0, mask, mask);
+
 }
 
 static const struct regmap_config siul2_regmap_conf = {
@@ -887,7 +896,7 @@ static int siul2_irq_setup(struct platform_device *pdev,
 	 * interrupt line.
 	 */
 	ret = devm_request_irq(&pdev->dev, irq, siul2_gpio_irq_handler,
-			       IRQF_SHARED | IRQF_NO_THREAD,
+			       IRQF_SHARED,
 			       dev_name(&pdev->dev), gpio_dev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request interrupt\n");
@@ -927,16 +936,13 @@ static int siul2_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct siul2_gpio_dev *gpio_dev = to_siul2_gpio_dev(chip);
 	unsigned int mask, pad, reg_offset, data = 0;
-	enum gpio_dir dir;
 	struct regmap *regmap;
-
-	dir = gpio_get_direction(gpio_dev, offset);
 
 	mask = siul2_pin2mask(offset);
 	pad = siul2_pin2pad(offset);
 
 	reg_offset = siul2_get_pad_offset(pad);
-	regmap = siul2_offset_to_regmap(gpio_dev, offset, (dir == IN));
+	regmap = siul2_offset_to_regmap(gpio_dev, offset, true);
 	if (!regmap)
 		return -EINVAL;
 
@@ -1154,6 +1160,7 @@ static int siul2_gpio_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, gpio_dev);
 
 	spin_lock_init(&gpio_dev->lock);
+	raw_spin_lock_init(&gpio_dev->wa_lock);
 
 	for (i = 0; i < ARRAY_SIZE(gpio_dev->siul2); ++i) {
 		err = siul2_get_gpio_pinspec(pdev, &pinspec, i);
@@ -1174,7 +1181,7 @@ static int siul2_gpio_probe(struct platform_device *pdev)
 		gpio_dev->siul2[i].gpio_num = pinspec.args[2];
 	}
 
-	gc->base = -1;
+	gc->base = 0;
 
 	/* In some cases, there is a gap between SIUL20 and SIUL21 GPIOS. */
 	gc->ngpio = gpio_dev->siul2[1].gpio_base + gpio_dev->siul2[1].gpio_num;

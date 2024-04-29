@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
-/* Copyright 2020-2023 NXP */
+/* Copyright 2020-2024 NXP */
 #ifndef LLCE_CAN_H
 #define LLCE_CAN_H
 
@@ -249,7 +249,12 @@ enum llce_can_command_id {
 	 */
 	LLCE_CAN_CMD_SETADVANCEDFILTER_AT_ADDRESS,
 	/** The host enables or disables can2pcie processing entirely.*/
-	LLCE_CAN_CMD_SETCAN2PCIESTATE
+	LLCE_CAN_CMD_SETCAN2PCIESTATE,
+	/**
+	 * The host requests all LLCE cores to execute WFI and shut
+	 * down.
+	 */
+	LLCE_CAN_CMD_SHUTDOWN
 } __packed;
 
 /**
@@ -418,7 +423,9 @@ enum llce_af_rule_id {
 	/** Destination rule type used for can2eth use case. */
 	CAN_AF_CAN2ETH,
 	/** Destination rule type used for can2pcie use case. */
-	CAN_AF_CAN2PCIE
+	CAN_AF_CAN2PCIE,
+	/** Destination rule type used for can2hse use case. */
+	CAN_AF_CAN2HSE
 } __packed;
 
 /**
@@ -788,6 +795,8 @@ struct llce_can_rx_filter {
 	 * \b 0 means don't care.
 	 * - For RANGE filters: Maximum accepted id value.
 	 * - For EXACT MATCH: not used.
+	 *
+	 * Set LLCE_CAN_MB_IDE to match only standard/extended, unset for mixed
 	 */
 	u32 id_mask;
 	/**
@@ -795,6 +804,8 @@ struct llce_can_rx_filter {
 	 * - For MASK filters: CAN frame ID value.
 	 * - For RANGE filters: Minimum accepted id value.
 	 * - For EXACT MATCH: id value
+	 *
+	 * Bit LLCE_CAN_MB_IDE controls extended/standard if enabled in mask.
 	 */
 	u32 message_id;
 	/**
@@ -849,6 +860,8 @@ struct llce_can_aux_filter {
 	 * \b 0 means don't care.
 	 * - For RANGE filters: Maximum accepted id value.
 	 * - For EXACT MATCH: not used.
+	 *
+	 * Set LLCE_CAN_MB_IDE to match only standard/extended, unset for mixed
 	 */
 	u32 id_mask;
 	/**
@@ -856,6 +869,8 @@ struct llce_can_aux_filter {
 	 * - For MASK filters: CAN frame ID value.
 	 * - For RANGE filters: Minimum accepted id value.
 	 * - For EXACT MATCH: id value
+	 *
+	 * Bit LLCE_CAN_MB_IDE controls extended/standard if enabled in mask.
 	 */
 	u32 message_id;
 	/**
@@ -914,7 +929,11 @@ struct llce_can_can2can_routing_table {
 	 * LLCE_CAN_ROUTING_ID_REMAPPING_EN
 	 */
 	u32 can2can_routing_options;
-	/** INPUT: Can Id Remap Value.*/
+	/**
+	 * INPUT: Can Id Remap Value.
+	 * Copied into word0 of outgoing frame, except RTR flag. See
+	 * struct llce_can_mb.
+	 */
 	u32 can_id_remap_value;
 	/**
 	 * INPUT: List of destination CAN controllers for the
@@ -993,6 +1012,16 @@ struct llce_can_can2pcie_routing_table {
 } __aligned(4) __packed;
 
 /**
+ * Data structure type containing CAN to HSE destination rule
+ * configuration.
+ * It is used to define a specific destination rule for can2hse routing.
+ **/
+struct llce_can_can2hse_routing_table {
+	/** INPUT: Key handle required to compute key on HSE side */
+	u32 can2hse_key_handle;
+} __aligned(4) __packed;
+
+/**
  * Data structure type representing  destination rule used by Advanced
  * Features(AF)
  * Used to hold a generic type of AF destination rule
@@ -1010,6 +1039,8 @@ struct can_af_dest_rules {
 		struct llce_can_can2eth_routing_table can2eth;
 		/** INPUT: Destination rule for can2pcie use case.*/
 		struct llce_can_can2pcie_routing_table can2pcie;
+		/** INPUT: Destination rule for can2hse use case.*/
+		struct llce_can_can2hse_routing_table can2hse;
 	} af_dest;
 	/** INPUT: Destination rule type.*/
 	enum llce_af_rule_id af_dest_id;
@@ -1122,14 +1153,14 @@ struct llce_can_init_platform_cmd {
 	/**
 	 * INPUT: Array containing maximum number of regular filters per
 	 * channel.
-	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN_U32 as a
+	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN as a
 	 * controller option example
 	 */
 	u16 max_regular_filter_count[LLCE_CAN_CONFIG_MAXCTRL_COUNT];
 	/**
 	 * INPUT: Array containing maximum number of advanced filters
 	 * per channel.
-	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN_U32 as a
+	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN as a
 	 * controller option example
 	 */
 	u16 max_advanced_filter_count[LLCE_CAN_CONFIG_MAXCTRL_COUNT];
@@ -1179,7 +1210,7 @@ struct llce_can_init_platform_cmd {
 struct llce_can_init_cmd {
 	/**
 	 * INPUT: Configuration options for a hardware CAN controller.
-	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN_U32 as a
+	 * See LLCE_CAN_CONTROLLERCONFIG_CTRL_EN as a
 	 * controller  option example
 	 */
 	u32 ctrl_config;
@@ -1270,8 +1301,8 @@ struct llce_can_get_status_cmd {
 
 /**
  * Filter address identifier
- * It is sent by the host to LLCE in order to specify a specific filter,
- * identified by a hardware address, to enable/disable/remove
+ * It is sent by the host to LLCE in order to disable/enable a specific filter,
+ * identified by its address
  **/
 struct llce_can_change_filter {
 	/**

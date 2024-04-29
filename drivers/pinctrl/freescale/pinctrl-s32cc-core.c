@@ -532,15 +532,15 @@ static int s32cc_pmx_gpio_set_direction(struct pinctrl_dev *pctldev,
 	if (ret)
 		return -EINVAL;
 
-	if (input) {
-		/* Disable output buffer and enable input buffer */
+	/* Always enable IBE for GPIOs. This allows us to read the
+	 * actual line value and compare it with the one set.
+	 */
+	config |= S32CC_MSCR_IBE;
+
+	if (input)
 		config &= ~S32CC_MSCR_OBE;
-		config |= S32CC_MSCR_IBE;
-	} else {
-		/* Disable input buffer and enable output buffer */
-		config &= ~S32CC_MSCR_IBE;
+	else
 		config |= S32CC_MSCR_OBE;
-	}
 
 	return s32cc_pinctrl_writel(config, pctldev, offset);
 }
@@ -580,6 +580,10 @@ static int s32cc_get_pin_conf(struct s32cc_pinctrl *ipctl,
 		return 0;
 	case PIN_CONFIG_DRIVE_OPEN_DRAIN:
 		*config |= S32CC_MSCR_ODE;
+		*mask |= S32CC_MSCR_ODE;
+		break;
+	case PIN_CONFIG_DRIVE_PUSH_PULL:
+		*config &= ~S32CC_MSCR_ODE;
 		*mask |= S32CC_MSCR_ODE;
 		break;
 	case PIN_CONFIG_OUTPUT_ENABLE:

@@ -3,7 +3,7 @@
  * System Control and Management Interface (SCMI) Message SMC/HVC
  * Transport driver
  *
- * Copyright 2020,2022 NXP
+ * Copyright 2020,2022-2023 NXP
  */
 
 #include <linux/arm-smccc.h>
@@ -97,9 +97,16 @@ static inline void smc_channel_lock_init(struct scmi_smc *scmi_info)
 static inline int
 smc_channel_try_lock_acquire(struct scmi_smc *scmi_info)
 {
-	if (IS_ENABLED(CONFIG_ARM_SCMI_TRANSPORT_SMC_ATOMIC_ENABLE))
-		return spin_trylock_irqsave(&scmi_info->spinlock,
-					    scmi_info->spin_flags);
+	unsigned long flags;
+	int ret;
+
+	if (IS_ENABLED(CONFIG_ARM_SCMI_TRANSPORT_SMC_ATOMIC_ENABLE)) {
+		ret = spin_trylock_irqsave(&scmi_info->spinlock,
+					   flags);
+		if (ret)
+			scmi_info->spin_flags = flags;
+		return ret;
+	}
 
 	return mutex_trylock(&scmi_info->shmem_lock);
 }
@@ -212,8 +219,10 @@ static int smc_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 		return PTR_ERR(scmi_info);
 
 	np = of_parse_phandle(cdev->of_node, "shmem", shmem_idx);
-	if (!of_device_is_compatible(np, "arm,scmi-shmem"))
+	if (!of_device_is_compatible(np, "arm,scmi-shmem")) {
+		of_node_put(np);
 		return -ENXIO;
+	}
 
 	ret = of_address_to_resource(np, 0, &res);
 	of_node_put(np);

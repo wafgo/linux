@@ -5,7 +5,7 @@
  * derived from the OF-version.
  *
  * Copyright (c) 2010 Pengutronix e.K.
- * Copyright 2020-2021, 2023 NXP
+ * Copyright 2020-2021, 2023-2024 NXP
  *   Author: Wolfram Sang <kernel@pengutronix.de>
  */
 
@@ -51,6 +51,7 @@
 #define ESDHC_DEBUG_SEL_ASYNC_FIFO_STATE	7
 
 #define ESDHC_SYS_CTRL			0x2c
+#define SYS_CTRL_FIFO			BIT(22)
 #define SYS_CTRL_RSTA			BIT(24)
 
 #define ESDHC_WTMK_LVL			0x44
@@ -179,8 +180,8 @@
 #define ESDHC_FLAG_HS400		BIT(9)
 /*
  * The IP has errata ERR010450
- * uSDHC: Due to the I/O timing limit, for SDR mode, SD card clock can't
- * exceed 150MHz, for DDR mode, SD card clock can't exceed 45MHz.
+ * uSDHC: At 1.8V due to the I/O timing limit, for SDR mode, SD card
+ * clock can't exceed 150MHz, for DDR mode, SD card clock can't exceed 45MHz.
  */
 #define ESDHC_FLAG_ERR010450		BIT(10)
 /* The IP supports HS400ES mode */
@@ -205,6 +206,9 @@
  * disable the ACMD23 feature.
  */
 #define ESDHC_FLAG_BROKEN_AUTO_CMD23	BIT(16)
+
+/* Host controller does not support SDR104 mode */
+#define ESDHC_FLAG_BROKEN_SDR104	BIT(17)
 
 enum wp_types {
 	ESDHC_WP_NONE,		/* no WP, neither controller nor gpio */
@@ -327,7 +331,8 @@ static struct esdhc_soc_data usdhc_s32cc_data = {
 			| ESDHC_FLAG_HS400
 			| ESDHC_FLAG_HS400_ES
 			| ESDHC_FLAG_MAN_TUNING
-			| ESDHC_FLAG_CQHCI,
+			| ESDHC_FLAG_CQHCI
+			| ESDHC_FLAG_BROKEN_SDR104,
 };
 
 struct pltfm_imx_data {
@@ -532,6 +537,13 @@ static u32 esdhc_readl_le(struct sdhci_host *host, int reg)
 				val &= ~(SDHCI_SUPPORT_SDR50 | SDHCI_SUPPORT_DDR50);
 			if (IS_ERR_OR_NULL(imx_data->pins_200mhz))
 				val &= ~(SDHCI_SUPPORT_SDR104 | SDHCI_SUPPORT_HS400);
+
+			/*
+			 * Do not advertise faster UHS SDR104 mode if the
+			 * controller does not support it.
+			 */
+			if (imx_data->socdata->flags & ESDHC_FLAG_BROKEN_SDR104)
+				val &= ~SDHCI_SUPPORT_SDR104;
 		}
 	}
 
@@ -958,7 +970,8 @@ static inline void esdhc_pltfm_set_clock(struct sdhci_host *host,
 		| ESDHC_CLOCK_MASK);
 	sdhci_writel(host, temp, ESDHC_SYSTEM_CONTROL);
 
-	if (imx_data->socdata->flags & ESDHC_FLAG_ERR010450) {
+	if ((imx_data->socdata->flags & ESDHC_FLAG_ERR010450) &&
+	    (!(host->quirks2 & SDHCI_QUIRK2_NO_1_8_V))) {
 		unsigned int max_clock;
 
 		max_clock = imx_data->is_ddr ? 45000000 : 150000000;
@@ -1053,35 +1066,51 @@ static int usdhc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 	return sdhci_execute_tuning(mmc, opcode);
 }
 
-static void esdhc_poll_rsta(struct sdhci_host *host)
+static void esdhc_poll_sys_ctrl_field(struct sdhci_host *host, u32 field)
 {
+	int ret;
 	u32 reg;
 
-	esdhc_set_bits(host, ESDHC_SYS_CTRL, SYS_CTRL_RSTA);
-	if (readl_poll_timeout(host->ioaddr + ESDHC_SYS_CTRL, reg,
-			       !(reg & SYS_CTRL_RSTA), 10, 100))
+	esdhc_set_bits(host, ESDHC_SYS_CTRL, field);
+	ret = readl_poll_timeout(host->ioaddr + ESDHC_SYS_CTRL, reg,
+				 !(reg & field), 10, 100);
+	if (ret)
 		dev_warn(mmc_dev(host->mmc),
-			 "Warning: Reset did not complete within 100us\n");
+			 "Warning: Reset did not complete within 100us, status: %d\n", ret);
+}
+
+static void esdhc_cfg_delay_chain(struct sdhci_host *host, u32 val)
+{
+	esdhc_poll_sys_ctrl_field(host, SYS_CTRL_RSTA);
+	writel(DLY_CELL_SET_PRE(val),
+	       host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
+	esdhc_poll_sys_ctrl_field(host, SYS_CTRL_FIFO);
 }
 
 static int esdhc_executing_tuning(struct sdhci_host *host, u32 opcode)
 {
 	u32 r, value_start, value_end;
+	bool tuning_failed_before = false;
 
 	esdhc_clear_bits(host, ESDHC_TUNING_CTRL, ESDHC_STD_TUNING_EN);
-	esdhc_poll_rsta(host);
+	esdhc_clear_bits(host, ESDHC_VENDOR_SPEC, ESDHC_VENDOR_SPEC_FRC_SDCLK_ON);
+	esdhc_clear_bits(host, ESDHC_MIX_CTRL, ESDHC_MIX_CTRL_FBCLK_SEL);
 	esdhc_set_bits(host, ESDHC_MIX_CTRL,
 		       (ESDHC_MIX_CTRL_EXE_TUNE | ESDHC_MIX_CTRL_SMPCLK_SEL));
-	esdhc_set_bits(host, ESDHC_VENDOR_SPEC, ESDHC_VENDOR_SPEC_FRC_SDCLK_ON);
 
-	/* Find the start of the passing window */
+	/* Find the start of the passing window
+	 * Passing window should not start from value 0.
+	 */
 	for (value_start = ESDHC_TUNE_CTRL_MIN;
 	     value_start <= ESDHC_TUNE_CTRL_MAX;
 	     value_start += ESDHC_TUNE_CTRL_STEP) {
-		writel(DLY_CELL_SET_PRE(value_start),
-		       host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
-		if (!mmc_send_tuning(host->mmc, opcode, NULL))
-			break;
+		esdhc_cfg_delay_chain(host, value_start);
+		if (!mmc_send_tuning(host->mmc, opcode, NULL)) {
+			if (tuning_failed_before)
+				break;
+		} else {
+			tuning_failed_before = true;
+		}
 	}
 	if (value_start > ESDHC_TUNE_CTRL_MAX)
 		return -EINVAL;
@@ -1090,21 +1119,26 @@ static int esdhc_executing_tuning(struct sdhci_host *host, u32 opcode)
 	for (value_end = value_start;
 	     value_end + ESDHC_TUNE_CTRL_STEP <= ESDHC_TUNE_CTRL_MAX;
 	     value_end += ESDHC_TUNE_CTRL_STEP) {
-		writel(DLY_CELL_SET_PRE((value_end + ESDHC_TUNE_CTRL_STEP)),
-		       host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
+		esdhc_cfg_delay_chain(host, value_end + ESDHC_TUNE_CTRL_STEP);
 		if (mmc_send_tuning(host->mmc, opcode, NULL))
 			break;
 	}
 
 	esdhc_clear_bits(host, ESDHC_MIX_CTRL, ESDHC_MIX_CTRL_EXE_TUNE);
-	esdhc_clear_bits(host, ESDHC_VENDOR_SPEC,
-			 ESDHC_VENDOR_SPEC_FRC_SDCLK_ON);
-	esdhc_poll_rsta(host);
+	esdhc_poll_sys_ctrl_field(host, SYS_CTRL_RSTA);
 	esdhc_set_bits(host, ESDHC_MIX_CTRL, ESDHC_MIX_CTRL_SMPCLK_SEL);
 
 	/* According to the "Manual Tuning Procedure" chapter in the RM */
 	r = ((value_start + value_end) / 2);
-	r = ((((r << 8) & 0xffffff00) - 0x300) | 0x33);
+	r = ((r << 8) & 0xffffff00);
+	if (r < 0x300) {
+		dev_warn(mmc_dev(host->mmc),
+			 "Passing tuning window: [%u - %u] is too small\n",
+			 value_start, value_end);
+		return -EINVAL;
+	}
+
+	r = ((r - 0x300) | 0x33);
 	writel(r, host->ioaddr + ESDHC_TUNE_CTRL_STATUS);
 
 	readl_poll_timeout(host->ioaddr + ESDHC_TUNE_CTRL_STATUS, r,

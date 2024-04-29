@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
 /*
- *  Copyright 2022-2023 NXP
+ *  Copyright 2022-2024 NXP
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -284,12 +284,11 @@ static int update_irq_mapping(struct scmi_gpio_dev *gpio_dev,
 	const struct scmi_gpio_proto_ops *scmi_ops = gpio_dev->scmi_ops;
 	struct gpio_eirq_state *state;
 	bool requested_gpio, found = false;
-	unsigned long flags;
 	int ret;
 
-	spin_lock_irqsave(&gpio_dev->eirqs.states_lock, flags);
+	spin_lock(&gpio_dev->eirqs.states_lock);
 	found = get_gpio_irq_active_state(gpio_dev, gpio, irq);
-	spin_unlock_irqrestore(&gpio_dev->eirqs.states_lock, flags);
+	spin_unlock(&gpio_dev->eirqs.states_lock);
 
 	if (found)
 		return 0;
@@ -322,12 +321,12 @@ static int update_irq_mapping(struct scmi_gpio_dev *gpio_dev,
 		goto release_gpio;
 	}
 
-	spin_lock_irqsave(&gpio_dev->eirqs.states_lock, flags);
+	spin_lock(&gpio_dev->eirqs.states_lock);
 	state = &gpio_dev->eirqs.states[*irq];
 
 	state->gpio = gpio;
 	state->active = true;
-	spin_unlock_irqrestore(&gpio_dev->eirqs.states_lock, flags);
+	spin_unlock(&gpio_dev->eirqs.states_lock);
 
 release_gpio:
 	if (ret && !requested_gpio)
@@ -344,10 +343,9 @@ static int release_irq_mapping(struct scmi_gpio_dev *gpio_dev, unsigned int gpio
 {
 	const struct scmi_gpio_proto_ops *scmi_ops = gpio_dev->scmi_ops;
 	struct gpio_eirq_state *state = NULL;
-	unsigned long flags;
 	u32 index;
 
-	spin_lock_irqsave(&gpio_dev->eirqs.states_lock, flags);
+	spin_lock(&gpio_dev->eirqs.states_lock);
 
 	if (get_gpio_irq_active_state(gpio_dev, gpio, &index))
 		state = &gpio_dev->eirqs.states[index];
@@ -356,7 +354,7 @@ static int release_irq_mapping(struct scmi_gpio_dev *gpio_dev, unsigned int gpio
 	if (state)
 		state->active = false;
 
-	spin_unlock_irqrestore(&gpio_dev->eirqs.states_lock, flags);
+	spin_unlock(&gpio_dev->eirqs.states_lock);
 
 	if (!state)
 		return -EINVAL;
@@ -467,7 +465,8 @@ static void scmi_gpio_irq_shutdown(struct irq_data *data)
 	if (gpio > U32_MAX)
 		return;
 
-	release_irq(gpio_dev, gpio);
+	(void)mask_gpio_irq(gpio_dev, gpio);
+	(void)release_irq(gpio_dev, gpio);
 }
 
 static void scmi_gpio_irq_mask(struct irq_data *data)

@@ -18,6 +18,7 @@
 #include <linux/phylink.h>
 #include <linux/platform_device.h>
 #include <linux/stmmac.h>
+#include <soc/s32cc/nvmem_common.h>
 
 /* S32CC Serdes */
 #include <linux/pcs/pcs-xpcs.h>
@@ -51,6 +52,7 @@ struct s32cc_priv_data {
 	struct clk *tx_clk;
 	struct clk *rx_clk;
 	bool enable_rx;
+	bool use_nvmem;
 
 	/* Serdes */
 	int link_an;
@@ -145,10 +147,49 @@ static void xpcs_get_state(struct phylink_pcs *pcs,
 		gmac->xpcs_ops->xpcs_config(gmac->xpcs, state);
 }
 
+static int s32cc_gmac_write_phy_intf_select(struct s32cc_priv_data *gmac)
+{
+	u32 intf_sel;
+	int ret;
+
+	switch (gmac->intf_mode) {
+	case PHY_INTERFACE_MODE_SGMII:
+		intf_sel = PHY_INTF_SEL_SGMII;
+		break;
+	case PHY_INTERFACE_MODE_RGMII:
+	case PHY_INTERFACE_MODE_RGMII_ID:
+	case PHY_INTERFACE_MODE_RGMII_TXID:
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+		intf_sel = PHY_INTF_SEL_RGMII;
+		break;
+	case PHY_INTERFACE_MODE_RMII:
+		intf_sel = PHY_INTF_SEL_RMII;
+		break;
+	case PHY_INTERFACE_MODE_MII:
+		intf_sel = PHY_INTF_SEL_MII;
+		break;
+	default:
+		dev_err(gmac->dev, "Unsupported PHY interface: %s\n",
+			phy_modes(gmac->intf_mode));
+		return -EINVAL;
+	}
+
+	if (gmac->use_nvmem) {
+		ret = write_nvmem_cell(gmac->dev, "gmac_phy_intf_sel", intf_sel);
+		if (ret)
+			return ret;
+	} else {
+		writel(intf_sel, gmac->ctrl_sts);
+	}
+
+	dev_dbg(gmac->dev, "PHY mode set to %s\n", phy_modes(gmac->intf_mode));
+
+	return 0;
+}
+
 static int s32cc_gmac_init(struct platform_device *pdev, void *priv)
 {
 	struct s32cc_priv_data *gmac = priv;
-	u32 intf_sel;
 	int ret;
 
 	if (gmac->tx_clk) {
@@ -170,33 +211,10 @@ static int s32cc_gmac_init(struct platform_device *pdev, void *priv)
 		}
 	}
 
-	/* set interface mode */
-	if (gmac->ctrl_sts) {
-		switch (gmac->intf_mode) {
-		case PHY_INTERFACE_MODE_SGMII:
-			intf_sel = PHY_INTF_SEL_SGMII;
-			break;
-		case PHY_INTERFACE_MODE_RGMII:
-		case PHY_INTERFACE_MODE_RGMII_ID:
-		case PHY_INTERFACE_MODE_RGMII_TXID:
-		case PHY_INTERFACE_MODE_RGMII_RXID:
-			intf_sel = PHY_INTF_SEL_RGMII;
-			break;
-		case PHY_INTERFACE_MODE_RMII:
-			intf_sel = PHY_INTF_SEL_RMII;
-			break;
-		case PHY_INTERFACE_MODE_MII:
-			intf_sel = PHY_INTF_SEL_MII;
-			break;
-		default:
-			dev_err(&pdev->dev, "Unsupported PHY interface: %s\n",
-				phy_modes(gmac->intf_mode));
-			return -EINVAL;
-		}
-
-		writel(intf_sel, gmac->ctrl_sts);
-
-		dev_dbg(&pdev->dev, "PHY mode set to %s\n", phy_modes(gmac->intf_mode));
+	ret = s32cc_gmac_write_phy_intf_select(gmac);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't set PHY interface mode\n");
+		return ret;
 	}
 
 	return 0;
@@ -369,6 +387,8 @@ static int s32cc_dwmac_probe(struct platform_device *pdev)
 	struct resource *res;
 	const char *tx_clk, *rx_clk;
 	struct phy *serdes_phy = NULL;
+	struct nvmem_cell *cell;
+	bool use_nvmem;
 	int ret;
 
 	if (device_get_phy_mode(&pdev->dev) == PHY_INTERFACE_MODE_SGMII) {
@@ -381,6 +401,19 @@ static int s32cc_dwmac_probe(struct platform_device *pdev)
 			serdes_phy = NULL;
 	}
 
+	/* Check if NVMEM for PHY Interface Mode selection is available */
+	cell = nvmem_cell_get(&pdev->dev, "gmac_phy_intf_sel");
+	if (IS_ERR(cell)) {
+		if (PTR_ERR(cell) == -EPROBE_DEFER)
+			return PTR_ERR(cell);
+
+		dev_info(&pdev->dev, "No NVMEM for GPRs available, mapping them as resource\n");
+		use_nvmem = false;
+	} else {
+		use_nvmem = true;
+		nvmem_cell_put(cell);
+	}
+
 	ret = stmmac_get_platform_resources(pdev, &stmmac_res);
 	if (ret)
 		return ret;
@@ -391,13 +424,16 @@ static int s32cc_dwmac_probe(struct platform_device *pdev)
 	}
 
 	gmac->dev = &pdev->dev;
+	gmac->use_nvmem = use_nvmem;
 
 	/* S32G control reg */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	gmac->ctrl_sts = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR_OR_NULL(gmac->ctrl_sts)) {
-		dev_err(&pdev->dev, "S32CC config region is missing\n");
-		return PTR_ERR(gmac->ctrl_sts);
+	if (!gmac->use_nvmem) {
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		gmac->ctrl_sts = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR_OR_NULL(gmac->ctrl_sts)) {
+			dev_err(&pdev->dev, "S32CC config region is missing\n");
+			return PTR_ERR(gmac->ctrl_sts);
+		}
 	}
 
 	plat_dat = stmmac_probe_config_dt(pdev, stmmac_res.mac);

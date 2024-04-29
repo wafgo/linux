@@ -224,7 +224,7 @@ struct dw_pcie_ep_ops {
 	 * driver.
 	 */
 	unsigned int (*func_conf_select)(struct dw_pcie_ep *ep, u8 func_no);
-#ifdef CONFIG_PCI_EPF_TEST
+#if (IS_ENABLED(CONFIG_PCI_EPF_TEST))
 	int	(*start_dma)(struct dw_pcie_ep *ep, bool dir,
 				dma_addr_t src, dma_addr_t dst, u32 len,
 				struct completion *complete);
@@ -388,6 +388,20 @@ static inline void dw_pcie_dbi_ro_wr_dis(struct dw_pcie *pci)
 	val = dw_pcie_readl_dbi(pci, reg);
 	val &= ~PCIE_DBI_RO_WR_EN;
 	dw_pcie_writel_dbi(pci, reg, val);
+}
+
+static inline int dw_pcie_start_link(struct dw_pcie *pci)
+{
+	if (pci->ops && pci->ops->start_link)
+		return pci->ops->start_link(pci);
+
+	return 0;
+}
+
+static inline void dw_pcie_stop_link(struct dw_pcie *pci)
+{
+	if (pci->ops && pci->ops->stop_link)
+		pci->ops->stop_link(pci);
 }
 
 #ifdef CONFIG_PCIE_DW_HOST

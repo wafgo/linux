@@ -4,9 +4,12 @@
  * driver by Fugang Duan <B38611@freescale.com>)
  *
  * Copyright 2013 Freescale Semiconductor, Inc.
- * Copyright 2017, 2020-2022 NXP
+ * Copyright 2017, 2020-2023 NXP
  */
 
+#include <linux/circ_buf.h>
+#include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
@@ -31,6 +34,8 @@
 #include <linux/iio/triggered_buffer.h>
 #include <linux/iio/trigger_consumer.h>
 
+#define INDIO_UNINITIALIZED	0
+
 /* This will be the driver name the kernel reports */
 #define DRIVER_NAME "s32-adc"
 
@@ -41,55 +46,56 @@
 #define REG_ADC_CEOCFR(g)	(0x14 + ((g) << 2))
 #define REG_ADC_IMR			0x20
 #define REG_ADC_CIMR(g)		(0x24 + ((g) << 2))
+#define REG_ADC_DMAE		0x40
+#define REG_ADC_DMAR(g)		(0x44 + ((g) << 2))
 #define REG_ADC_CTR(g)		(0x94 + ((g) << 2))
 #define REG_ADC_NCMR(g)		(0xa4 + ((g) << 2))
 #define REG_ADC_CDR(c)		(0x100 + ((c) << 2))
 #define REG_ADC_CALSTAT		0x39c
 
 /* Main Configuration Register field define */
-#define ADC_PWDN			0x01
-#define ADC_ACKO			0x20
-#define ADC_ADCLKSEL		0x100
-#define ADC_TSAMP_MASK		0x600
-#define ADC_NRSMPL_32		0X800
-#define ADC_NRSMPL_128		0X1000
-#define ADC_NRSMPL_512		0X1800
-#define ADC_NRSMPL_MASK		0x1800
-#define ADC_AVGEN			0x2000
-#define ADC_CALSTART		0x4000
-#define ADC_NSTART			0x1000000
-#define ADC_MODE			0x20000000
-#define ADC_OWREN			0x80000000
+#define ADC_PWDN		BIT(0)
+#define ADC_ACKO		BIT(5)
+#define ADC_ADCLKSEL		BIT(8)
+#define ADC_TSAMP_MASK		GENMASK(10, 9)
+#define ADC_NRSMPL_32		BIT(11)
+#define ADC_NRSMPL_128		BIT(12)
+#define ADC_NRSMPL_512		GENMASK(12, 11)
+#define ADC_NRSMPL_MASK		GENMASK(12, 11)
+#define ADC_AVGEN		BIT(13)
+#define ADC_CALSTART		BIT(14)
+#define ADC_NSTART		BIT(24)
+#define ADC_MODE		BIT(29)
+#define ADC_OWREN		BIT(31)
+
+#define DMAEN			BIT(0)
 
 /* Main Status Register field define */
 #define ADC_CALBUSY		BIT(29)
 #define ADC_CALFAIL		BIT(30)
 
 /* Interrupt Status Register field define */
-#define ADC_ECH			0x01
-#define ADC_EOC			0x02
+#define ADC_ECH			BIT(1)
 
 /* Channel Pending Register field define */
-#define ADC_EOC_CH(c)		(1 << (c) % 32)
+#define ADC_EOC_CH(c)		BIT((c) % 32)
 
-/* Interrupt Mask Register field define */
-#define ADC_MSKECH			0x01
 
 /* Channel Interrupt Mask Register field define */
-#define ADC_CIM(c)			(1 << (c) % 32)
-#define ADC_CIM_MASK		0xFF
+#define ADC_CIM(c)		BIT((c) % 32)
+#define ADC_CIM_MASK		GENMASK(7, 0)
 
 /* Conversion Timing Register field define */
 #define ADC_INPSAMP_MIN		8
 #define ADC_INPSAMP_MAX		0xFF
 
 /* Normal Conversion Mask Register field define */
-#define ADC_CH(c)			(1 << (c) % 32)
-#define ADC_CH_MASK			0xFF
+#define ADC_CH(c)			BIT((c) % 32)
+#define ADC_CH_MASK			GENMASK(7, 0)
 
 /* Channel Data Register field define */
-#define ADC_CDATA_MASK		0xFFF
-#define ADC_VALID			0x80000
+#define ADC_CDATA_MASK			GENMASK(11, 0)
+#define ADC_VALID			BIT(19)
 
 /* Calibration Status Register field define */
 #define ADC_TEST_RESULT(x)		((x) >> 16)
@@ -102,7 +108,6 @@
 #define ADC_CONV_TIMEOUT		100 /* ms */
 #define ADC_CAL_TIMEOUT				100000 /* us */
 #define ADC_WAIT				2000   /* us */
-#define ADC_NSEC_PER_SEC		1000000000
 #define ADC_NUM_CAL_STEPS		14
 #define ADC_NUM_GROUPS			2
 #define ADC_RESOLUTION			12
@@ -114,9 +119,12 @@
 
 #define BUFFER_ECH_NUM_OK	2
 #define ADC_NUM_CHANNELS	8
-#define CHANNEL_UNASSIGNED		-2
-#define ADC_DATA_READ_ERROR		-1
-#define ADC_DATA_READ_SUCCESS	0
+
+#define ADC_IIO_BUFF_SZ		(ADC_NUM_CHANNELS + (sizeof(u64) / sizeof(u16)))
+
+#define ADC_DMA_SAMPLE_SZ	DMA_SLAVE_BUSWIDTH_4_BYTES
+#define ADC_DMA_BUFF_SZ		(PAGE_SIZE * ADC_DMA_SAMPLE_SZ)
+#define ADC_DMA_SAMPLE_CNT	(ADC_DMA_BUFF_SZ / ADC_DMA_SAMPLE_SZ)
 
 enum freq_sel {
 	ADC_BUSCLK_EQUAL,
@@ -129,11 +137,6 @@ enum average_sel {
 	ADC_SAMPLE_32,
 	ADC_SAMPLE_128,
 	ADC_SAMPLE_512,
-};
-
-enum {
-	SAR_ADC_CONTINUOUS = 0,
-	SAR_ADC_ONESHOT
 };
 
 struct s32cc_adc_feature {
@@ -150,19 +153,28 @@ struct s32cc_adc_feature {
 struct s32cc_adc {
 	struct device *dev;
 	void __iomem *regs;
+	phys_addr_t regs_phys;
 	struct clk *clk;
 
 	u16 value;
 	u32 vref;
-	int current_channel;
-	int channels_used;
-	int buffer_ech_num;
+	u8 current_channel;
+	u8 channels_used;
 	struct s32cc_adc_feature adc_feature;
 
 	struct completion completion;
 
-	u16 buffer[ADC_NUM_CHANNELS];
+	u16 buffer[ADC_IIO_BUFF_SZ];
 	u16 buffered_chan[ADC_NUM_CHANNELS];
+
+	struct circ_buf dma_buf;
+	struct dma_chan	*dma_chan;
+	struct dma_slave_config dma_config;
+	dma_addr_t rx_dma_buf;
+	dma_cookie_t cookie;
+
+	/* Protect circular buffers access. */
+	spinlock_t lock;
 };
 
 #define ADC_CHAN(_idx, _chan_type) {			\
@@ -192,14 +204,9 @@ static const struct iio_chan_spec s32cc_adc_iio_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(32),
 };
 
-static inline int group_idx(int channel)
+static inline int group_idx(unsigned int channel)
 {
-	if (channel >= 0 && channel <= 7)
-		return 0;
-	if (channel >= 32 && channel <= 38)
-		return 1;
-
-	return -ECHRNG;
+	return (channel < 32) ? 0 : 1;
 }
 
 static inline unsigned long s32cc_adc_clk_rate(struct s32cc_adc *info)
@@ -230,10 +237,32 @@ static inline void s32cc_adc_cfg_init(struct s32cc_adc *info)
 	adc_feature->sample_num = ADC_SAMPLE_512;
 }
 
+static void s32cc_adc_disable_channels(struct s32cc_adc *info, int iio_mode)
+{
+	int i;
+
+	for (i = 0; i < ADC_NUM_GROUPS; i++) {
+		writel(0, info->regs + REG_ADC_CIMR(i));
+		writel(0, info->regs + REG_ADC_NCMR(i));
+		writel(ADC_CH_MASK, info->regs + REG_ADC_CEOCFR(i));
+
+		if (iio_mode == INDIO_BUFFER_SOFTWARE)
+			writel(0, info->regs + REG_ADC_DMAR(i));
+	}
+}
+
+static void s32cc_adc_irq_cfg(struct s32cc_adc *info, bool enable)
+{
+	if (enable)
+		writel(ADC_ECH, info->regs + REG_ADC_IMR);
+	else
+		writel(0, info->regs + REG_ADC_IMR);
+}
+
 static void s32cc_adc_cfg_post_set(struct s32cc_adc *info)
 {
 	struct s32cc_adc_feature *adc_feature = &info->adc_feature;
-	int mcr_data = 0, imr_data = 0;
+	int mcr_data = 0;
 
 	/* auto-clock-off mode enable */
 	if (adc_feature->auto_clk_off)
@@ -244,10 +273,6 @@ static void s32cc_adc_cfg_post_set(struct s32cc_adc *info)
 		mcr_data |= ADC_OWREN;
 
 	writel(mcr_data, info->regs + REG_ADC_MCR);
-
-	/* End of Conversion Chain interrupt enable */
-	imr_data |= ADC_MSKECH;
-	writel(imr_data, info->regs + REG_ADC_IMR);
 }
 
 static void s32cc_adc_calibration(struct s32cc_adc *info)
@@ -364,112 +389,185 @@ static void s32cc_adc_hw_init(struct s32cc_adc *info)
 	s32cc_adc_sample_set(info);
 }
 
+static void s32cc_adc_read_notify(struct s32cc_adc *info)
+{
+	int group;
+
+	for (group = 0; group < ADC_NUM_GROUPS; group++)
+		writel(ADC_CH_MASK, info->regs + REG_ADC_CEOCFR(group));
+}
+
 static int s32cc_adc_read_data(struct s32cc_adc *info,
 			       unsigned int chan)
 {
-	int group, ceocfr_data, cdr_data;
+	u32 ceocfr_data, cdr_data;
+	int group;
 
 	group = group_idx(chan);
 	ceocfr_data = readl(info->regs + REG_ADC_CEOCFR(group));
 	if (!(ceocfr_data & ADC_EOC_CH(chan)))
-		return ADC_DATA_READ_ERROR;
-
-	writel(ADC_EOC_CH(chan), info->regs + REG_ADC_CEOCFR(group));
+		return -EIO;
 
 	cdr_data = readl(info->regs + REG_ADC_CDR(chan));
 	if (!(cdr_data & ADC_VALID)) {
 		dev_err(info->dev, "error invalid data\n");
-		return ADC_DATA_READ_ERROR;
+		return -EIO;
 	}
 
-	info->value = cdr_data & ADC_CDATA_MASK;
-	return ADC_DATA_READ_SUCCESS;
+	return cdr_data & ADC_CDATA_MASK;
+}
+
+static void s32cc_adc_isr_buffer(struct iio_dev *indio_dev)
+{
+	struct s32cc_adc *info = iio_priv(indio_dev);
+	int i, ret;
+
+	for (i = 0; i < info->channels_used; i++) {
+		ret = s32cc_adc_read_data(info, info->buffered_chan[i]);
+		if (ret < 0) {
+			s32cc_adc_read_notify(info);
+			return;
+		}
+
+		info->buffer[i] = ret;
+	}
+
+	s32cc_adc_read_notify(info);
+	iio_push_to_buffers_with_timestamp(indio_dev,
+					   info->buffer,
+					   iio_get_time_ns(indio_dev));
+	iio_trigger_notify_done(indio_dev->trig);
+}
+
+static void s32cc_adc_isr_read_raw(struct iio_dev *indio_dev)
+{
+	struct s32cc_adc *info = iio_priv(indio_dev);
+	int ret;
+
+	ret = s32cc_adc_read_data(info, info->current_channel);
+	s32cc_adc_read_notify(info);
+	if (ret < 0)
+		return;
+
+	info->value = ret;
+	complete(&info->completion);
 }
 
 static irqreturn_t s32cc_adc_isr(int irq, void *dev_id)
 {
 	struct iio_dev *indio_dev = (struct iio_dev *)dev_id;
 	struct s32cc_adc *info = iio_priv(indio_dev);
-	int isr_data, i;
+	int isr_data;
 
 	isr_data = readl(info->regs + REG_ADC_ISR);
-	if (isr_data & ADC_ECH) {
-		writel(ADC_ECH | ADC_EOC,
-		       info->regs + REG_ADC_ISR);
+	if (!(isr_data & ADC_ECH))
+		return IRQ_NONE;
 
-		if (iio_buffer_enabled(indio_dev)) {
-			info->buffer_ech_num++;
-			if (info->buffer_ech_num < BUFFER_ECH_NUM_OK)
-				return IRQ_HANDLED;
-			info->buffer_ech_num = 0;
+	if (iio_buffer_enabled(indio_dev))
+		s32cc_adc_isr_buffer(indio_dev);
+	else
+		s32cc_adc_isr_read_raw(indio_dev);
 
-			for (i = 0; i < info->channels_used; i++) {
-				if (s32cc_adc_read_data(info,
-							info->buffered_chan[i]) ==
-							ADC_DATA_READ_ERROR)
-					return IRQ_HANDLED;
-				info->buffer[i] = info->value;
-			}
-
-			iio_push_to_buffers_with_timestamp(indio_dev,
-							   info->buffer,
-							   iio_get_time_ns(indio_dev));
-			iio_trigger_notify_done(indio_dev->trig);
-		} else {
-			if (s32cc_adc_read_data(info, info->current_channel) ==
-					ADC_DATA_READ_ERROR)
-				return IRQ_HANDLED;
-			complete(&info->completion);
-		}
-	}
+	writel(ADC_ECH, info->regs + REG_ADC_ISR);
 
 	return IRQ_HANDLED;
 }
 
-static void s32cc_adc_configure_read(struct s32cc_adc *info,
-				     unsigned int chan, int group, bool mode,
-				     int *ncmr_data, int *cimr_data)
+static void s32cc_adc_chan_enable(struct s32cc_adc *info,
+				  unsigned int chan, bool enable)
 {
-	int i;
+	u32 ncmr_data, cimr_data;
+	int group;
 
-	for (i = 0; i < ADC_NUM_GROUPS; i++) {
-		(*ncmr_data) = readl(info->regs + REG_ADC_NCMR(i));
-		(*cimr_data) = readl(info->regs + REG_ADC_CIMR(i));
-
-		if (mode == SAR_ADC_ONESHOT) {
-			(*ncmr_data) &= ~ADC_CH_MASK;
-			(*cimr_data) &= ~ADC_CIM_MASK;
-		}
-
-		if (i == group) {
-			(*ncmr_data) |= ADC_CH(chan);
-			(*cimr_data) |= ADC_CIM(chan);
-		}
-
-		writel((*ncmr_data), info->regs + REG_ADC_NCMR(i));
-		writel((*cimr_data), info->regs + REG_ADC_CIMR(i));
+	group = group_idx(chan);
+	ncmr_data = readl(info->regs + REG_ADC_NCMR(group));
+	cimr_data = readl(info->regs + REG_ADC_CIMR(group));
+	if (enable) {
+		ncmr_data |= ADC_CH(chan);
+		cimr_data |= ADC_CH(chan);
+	} else {
+		ncmr_data &= ~ADC_CH(chan);
+		cimr_data &= ~ADC_CH(chan);
 	}
+
+	writel(ncmr_data, info->regs + REG_ADC_NCMR(group));
+	writel(cimr_data, info->regs + REG_ADC_CIMR(group));
 }
 
-static void s32cc_adc_enable_conversion(struct s32cc_adc *info, bool mode)
+static void s32cc_adc_dma_chan_enable(struct s32cc_adc *info,
+				      unsigned int chan, bool enable)
 {
-	int mcr_data;
+	u32 dmar_data;
+	int group;
+
+	group = group_idx(chan);
+	dmar_data = readl(info->regs + REG_ADC_DMAR(group));
+	if (enable)
+		dmar_data |= BIT(chan);
+	else
+		dmar_data &= ~BIT(chan);
+
+	writel(dmar_data, info->regs + REG_ADC_DMAR(group));
+}
+
+static void s32cc_adc_dma_cfg(struct s32cc_adc *info, bool enable)
+{
+	u32 dmae_data;
+
+	dmae_data = readl(info->regs + REG_ADC_DMAE);
+	if (enable)
+		dmae_data |= DMAEN;
+	else
+		dmae_data &= ~DMAEN;
+	writel(dmae_data, info->regs + REG_ADC_DMAE);
+}
+
+static void s32cc_adc_enable(struct s32cc_adc *info, bool enable)
+{
+	u32 mcr_data;
 
 	mcr_data = readl(info->regs + REG_ADC_MCR);
-	if (mode == SAR_ADC_ONESHOT)
-		mcr_data &= ~ADC_MODE;
-	else
-		mcr_data |= ADC_MODE;
-	mcr_data &= ~ADC_PWDN;
+	if (enable) {
+		mcr_data &= ~ADC_PWDN;
+	} else {
+		mcr_data |= ADC_PWDN;
+		/* Stop any conversion. */
+		mcr_data &= ~ADC_NSTART;
+	}
+
 	writel(mcr_data, info->regs + REG_ADC_MCR);
 
 	/* Ensure there are at least three cycles between the
 	 * configuration of NCMR and the setting of NSTART
 	 */
-	ndelay(ADC_NSEC_PER_SEC / s32cc_adc_clk_rate(info) * 3);
+	if (enable)
+		ndelay(div64_u64(NSEC_PER_SEC,
+				 s32cc_adc_clk_rate(info)) * 3U);
+}
 
+static int s32cc_adc_start_conversion(struct s32cc_adc *info, int currentmode)
+{
+	u32 mcr_data;
+
+	mcr_data = readl(info->regs + REG_ADC_MCR);
 	mcr_data |= ADC_NSTART;
+
+	switch (currentmode) {
+	case INDIO_UNINITIALIZED:
+	case INDIO_DIRECT_MODE:
+	case INDIO_BUFFER_TRIGGERED:
+		mcr_data &= ~ADC_MODE;
+		break;
+	case INDIO_BUFFER_SOFTWARE:
+		mcr_data |= ADC_MODE;
+		break;
+	default:
+		dev_warn(info->dev, "invalid IIO mode %d\n", currentmode);
+		return -EINVAL;
+	}
 	writel(mcr_data, info->regs + REG_ADC_MCR);
+
+	return 0;
 }
 
 static int s32cc_read_raw(struct iio_dev *indio_dev,
@@ -479,58 +577,48 @@ static int s32cc_read_raw(struct iio_dev *indio_dev,
 			  long mask)
 {
 	struct s32cc_adc *info = iio_priv(indio_dev);
-	int ncmr_data, cimr_data;
-	int mcr_data;
-	long group, ret;
+	int ret;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
 		mutex_lock(&indio_dev->mlock);
 		if (iio_buffer_enabled(indio_dev)) {
-			mutex_unlock(&indio_dev->mlock);
-			return -EBUSY;
+			ret = -EBUSY;
+			goto out_iio_chan_info_raw;
 		}
+
+		info->current_channel = chan->channel;
+		s32cc_adc_chan_enable(info, chan->channel, true);
+		s32cc_adc_irq_cfg(info, true);
+		s32cc_adc_enable(info, true);
 
 		reinit_completion(&info->completion);
-
-		group = group_idx(chan->channel);
-		if (group < 0) {
-			mutex_unlock(&indio_dev->mlock);
-			return group;
-		}
-
-		s32cc_adc_configure_read(info, chan->channel, group,
-					 SAR_ADC_ONESHOT, &ncmr_data,
-					 &cimr_data);
-		info->current_channel = chan->channel;
-		s32cc_adc_enable_conversion(info, SAR_ADC_ONESHOT);
+		ret = s32cc_adc_start_conversion(info, indio_dev->currentmode);
+		if (ret < 0)
+			goto out_iio_chan_info_raw;
 
 		ret = wait_for_completion_interruptible_timeout
 			(&info->completion,
 			msecs_to_jiffies(ADC_CONV_TIMEOUT));
 
-		ncmr_data &= ~ADC_CH(info->current_channel);
-		cimr_data &= ~ADC_CIM(info->current_channel);
-		writel(ncmr_data, info->regs + REG_ADC_NCMR(group));
-		writel(cimr_data, info->regs + REG_ADC_CIMR(group));
-
-		mcr_data = readl(info->regs + REG_ADC_MCR);
-		mcr_data |= ADC_PWDN;
-		writel(mcr_data, info->regs + REG_ADC_MCR);
+		s32cc_adc_chan_enable(info, chan->channel, false);
+		s32cc_adc_irq_cfg(info, false);
+		s32cc_adc_enable(info, false);
 
 		if (ret == 0) {
-			mutex_unlock(&indio_dev->mlock);
-			return -ETIMEDOUT;
+			ret = -ETIMEDOUT;
+			goto out_iio_chan_info_raw;
 		}
-		if (ret < 0) {
-			mutex_unlock(&indio_dev->mlock);
-			return ret;
-		}
+
+		if (ret < 0)
+			goto out_iio_chan_info_raw;
 
 		*val = info->value;
+		ret = IIO_VAL_INT;
 
+out_iio_chan_info_raw:
 		mutex_unlock(&indio_dev->mlock);
-		return IIO_VAL_INT;
+		return ret;
 
 	case IIO_CHAN_INFO_SCALE:
 		*val = info->vref;
@@ -579,73 +667,213 @@ static int s32cc_write_raw(struct iio_dev *indio_dev,
 	return -EINVAL;
 }
 
+static void s32cc_adc_dma_cb(void *data)
+{
+	struct s32cc_adc *info = iio_priv((struct iio_dev *)data);
+	struct iio_dev *indio_dev = data;
+	struct dma_tx_state state;
+	struct circ_buf *dma_buf;
+	unsigned long flags;
+	u32 *dma_samples;
+	s64 timestamp;
+	int idx, ret;
+
+	dma_buf = &info->dma_buf;
+	dma_samples = (u32 *)dma_buf->buf;
+
+	spin_lock_irqsave(&info->lock, flags);
+	dmaengine_tx_status(info->dma_chan,
+			    info->cookie, &state);
+	dma_sync_single_for_cpu(&indio_dev->dev, info->rx_dma_buf,
+				ADC_DMA_BUFF_SZ, DMA_FROM_DEVICE);
+	/* Current head position */
+	dma_buf->head = (ADC_DMA_BUFF_SZ - state.residue) /
+			ADC_DMA_SAMPLE_SZ;
+	/* Make sure that head is multiple of info->channels_used */
+	dma_buf->head -= dma_buf->head % info->channels_used;
+
+	/* dma_buf->tail != dma_buf->head condition will become false
+	 * because dma_buf->tail will be incremented with 1.
+	 */
+	while (dma_buf->tail != dma_buf->head) {
+		idx = dma_buf->tail % info->channels_used;
+		info->buffer[idx] = dma_samples[dma_buf->tail];
+		dma_buf->tail = (dma_buf->tail + 1) % ADC_DMA_SAMPLE_CNT;
+		if (idx != info->channels_used - 1)
+			continue;
+
+		/* iio_push_to_buffers_with_timestamp should not be called
+		 * with dma_samples as parameter. The samples will be smashed
+		 * if timestamp is enabled.
+		 */
+		timestamp = iio_get_time_ns(indio_dev);
+		ret = iio_push_to_buffers_with_timestamp(indio_dev,
+							 info->buffer,
+							 timestamp);
+		if (ret < 0 && ret != -EBUSY)
+			dev_err_ratelimited(&indio_dev->dev,
+					    "failed to push iio buffer: %d",
+					    ret);
+	}
+
+	dma_buf->tail = dma_buf->head;
+	dma_sync_single_for_device(&indio_dev->dev, info->rx_dma_buf,
+				   ADC_DMA_BUFF_SZ, DMA_FROM_DEVICE);
+	spin_unlock_irqrestore(&info->lock, flags);
+}
+
+static int s32cc_adc_start_cyclic_dma(struct iio_dev *indio_dev)
+{
+	struct s32cc_adc *info = iio_priv(indio_dev);
+	struct dma_slave_config *config = &info->dma_config;
+	struct dma_async_tx_descriptor *desc;
+	int ret;
+
+	info->dma_buf.head = 0;
+	info->dma_buf.tail = 0;
+
+	config->src_addr = info->regs_phys +
+		REG_ADC_CDR(info->buffered_chan[0]);
+	config->src_port_window_size = info->channels_used;
+	ret = dmaengine_slave_config(info->dma_chan, config);
+	if (ret < 0) {
+		dev_err(info->dev, "failed to configure DMA slave\n");
+		return ret;
+	}
+
+	desc = dmaengine_prep_dma_cyclic(info->dma_chan,
+					 info->rx_dma_buf,
+					 ADC_DMA_BUFF_SZ,
+					 ADC_DMA_BUFF_SZ / 2,
+					 DMA_DEV_TO_MEM, DMA_PREP_INTERRUPT);
+	if (!desc) {
+		dev_err(info->dev,
+			"failed to prepare DMA cyclic transaction\n");
+		return -EINVAL;
+	}
+
+	desc->callback = s32cc_adc_dma_cb;
+	desc->callback_param = indio_dev;
+	info->cookie = dmaengine_submit(desc);
+	ret = dma_submit_error(info->cookie);
+	if (ret) {
+		dev_err(&indio_dev->dev, "failed to submit DMA cyclic\n");
+		dmaengine_terminate_async(info->dma_chan);
+		return ret;
+	}
+
+	dma_async_issue_pending(info->dma_chan);
+
+	return 0;
+}
+
 static int s32cc_adc_buffer_postenable(struct iio_dev *indio_dev)
 {
 	struct s32cc_adc *info = iio_priv(indio_dev);
-	unsigned int channel, first_channel = CHANNEL_UNASSIGNED;
-	int ncmr_data, cimr_data;
-	int group, pos = 0;
+	int iio_mode = indio_dev->currentmode;
+	unsigned long channel;
+	int ret;
+
+	info->channels_used = 0;
 
 	for_each_set_bit(channel, indio_dev->active_scan_mask,
 			 ADC_NUM_CHANNELS) {
-		if (first_channel == CHANNEL_UNASSIGNED)
-			first_channel = channel;
+		info->buffered_chan[info->channels_used++] = channel;
+		s32cc_adc_chan_enable(info, channel, true);
 
-		info->buffered_chan[pos++] = channel;
-		group = group_idx(channel);
-		if (group < 0)
-			return group;
-
-		s32cc_adc_configure_read(info, channel, group,
-					 SAR_ADC_CONTINUOUS, &ncmr_data,
-					 &cimr_data);
+		if (iio_mode == INDIO_BUFFER_SOFTWARE)
+			s32cc_adc_dma_chan_enable(info, channel, true);
 	}
 
-	info->channels_used = pos;
-	info->current_channel = first_channel;
-	s32cc_adc_enable_conversion(info, SAR_ADC_CONTINUOUS);
+	s32cc_adc_enable(info, true);
+	if (iio_mode == INDIO_BUFFER_SOFTWARE) {
+		s32cc_adc_dma_cfg(info, true);
+		ret = s32cc_adc_start_cyclic_dma(indio_dev);
+		if (ret)
+			goto buffer_postenable_clean_up;
+		return s32cc_adc_start_conversion(info, iio_mode);
+	}
 
+	s32cc_adc_irq_cfg(info, true);
 	return 0;
+
+buffer_postenable_clean_up:
+	s32cc_adc_enable(info, false);
+	s32cc_adc_dma_cfg(info, false);
+	s32cc_adc_disable_channels(info, iio_mode);
+
+	return ret;
 }
 
 static int s32cc_adc_buffer_predisable(struct iio_dev *indio_dev)
 {
 	struct s32cc_adc *info = iio_priv(indio_dev);
-	int mcr_data, ncmr_data, cimr_data;
-	int i;
 
-	for (i = 0; i < ADC_NUM_GROUPS; i++) {
-		ncmr_data = readl(info->regs + REG_ADC_NCMR(i));
-		cimr_data = readl(info->regs + REG_ADC_CIMR(i));
+	s32cc_adc_enable(info, false);
 
-		ncmr_data &= ~ADC_CH_MASK;
-		cimr_data &= ~ADC_CIM_MASK;
-
-		writel(ncmr_data, info->regs + REG_ADC_NCMR(i));
-		writel(cimr_data, info->regs + REG_ADC_CIMR(i));
+	if (indio_dev->currentmode == INDIO_BUFFER_SOFTWARE) {
+		/* The ADC DMAEN bit should be cleared before DMA transaction
+		 * is canceled.
+		 */
+		s32cc_adc_dma_cfg(info, false);
+		dmaengine_terminate_sync(info->dma_chan);
+	} else {
+		s32cc_adc_irq_cfg(info, false);
 	}
 
-	mcr_data = readl(info->regs + REG_ADC_MCR);
-	mcr_data &= ~ADC_NSTART;
-	mcr_data |= ADC_PWDN;
-	writel(mcr_data, info->regs + REG_ADC_MCR);
+	s32cc_adc_disable_channels(info, indio_dev->currentmode);
 
 	return 0;
 }
 
-static bool s32cc_adc_validate_scan_mask(struct iio_dev *indio_dev,
-					 const unsigned long *mask)
+static int s32cc_adc_preenable(struct iio_dev *indio_dev)
 {
+	unsigned long first_bit, set_bits = *indio_dev->active_scan_mask;
+
 	/* SAR_ADC permits any combination of the
-	 * available channels to be active
+	 * available channels in software triggered mode.
 	 */
-	return true;
+	if (indio_dev->currentmode == INDIO_BUFFER_TRIGGERED)
+		return 0;
+
+	first_bit = find_first_bit(indio_dev->active_scan_mask,
+				   ADC_NUM_CHANNELS);
+	/* Assumption: 8 bits max */
+	set_bits = (set_bits >> first_bit) & GENMASK(7, 0);
+	switch (set_bits) {
+	case BIT(0):
+		/* one bit */
+	case GENMASK(1, 0):
+		/* two bits */
+	case GENMASK(3, 0):
+		/* four consecutive bits */
+	case GENMASK(7, 0):
+		/* eight consecutive bits */
+		return 0;
+	default:
+		dev_err(&indio_dev->dev, "Invalid active scan mask\n");
+		return -EINVAL;
+	}
+}
+
+static irqreturn_t s32cc_adc_trigger_handler(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct s32cc_adc *info = iio_priv(indio_dev);
+	int ret;
+
+	ret = s32cc_adc_start_conversion(info, indio_dev->currentmode);
+	if (ret < 0)
+		return IRQ_NONE;
+
+	return IRQ_HANDLED;
 }
 
 static const struct iio_buffer_setup_ops iio_triggered_buffer_setup_ops = {
+	.preenable = s32cc_adc_preenable,
 	.postenable = &s32cc_adc_buffer_postenable,
 	.predisable = &s32cc_adc_buffer_predisable,
-	.validate_scan_mask = &s32cc_adc_validate_scan_mask,
 };
 
 static const struct iio_info s32cc_adc_iio_info = {
@@ -658,6 +886,45 @@ static const struct of_device_id s32cc_adc_match[] = {
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, s32cc_adc_match);
+
+static int s32cc_adc_dma_probe(struct s32cc_adc *info)
+{
+	struct device *dev_dma;
+	u8 *rx_buf;
+	int ret;
+
+	info->dma_chan = dma_request_chan(info->dev, "rx");
+	if (IS_ERR(info->dma_chan))  {
+		dev_err(info->dev, "can't get DMA channel\n");
+		return PTR_ERR(info->dma_chan);
+	}
+
+	dev_dma = info->dma_chan->device->dev;
+	rx_buf = dma_alloc_coherent(dev_dma, ADC_DMA_BUFF_SZ,
+				    &info->rx_dma_buf,
+				    GFP_KERNEL);
+	if (!rx_buf) {
+		dev_err(info->dev, "can't allocate coherent DMA area\n");
+		ret = -ENOMEM;
+		goto dma_release;
+	}
+	info->dma_buf.buf = rx_buf;
+
+	info->dma_config.direction = DMA_DEV_TO_MEM;
+	info->dma_config.src_addr_width = ADC_DMA_SAMPLE_SZ;
+	info->dma_config.src_maxburst = 1;
+	info->dma_config.dst_maxburst = 1;
+
+	dev_info(info->dev, "using %s for ADC DMA transfers\n",
+		 dma_chan_name(info->dma_chan));
+
+	return 0;
+
+dma_release:
+	dma_release_channel(info->dma_chan);
+
+	return ret;
+}
 
 static int s32cc_adc_probe(struct platform_device *pdev)
 {
@@ -687,13 +954,15 @@ static int s32cc_adc_probe(struct platform_device *pdev)
 		return irq;
 	}
 
-	ret = devm_request_irq(info->dev, irq,
-			       s32cc_adc_isr, 0,
+	ret = devm_request_irq(info->dev, irq, s32cc_adc_isr, 0,
 			       dev_name(&pdev->dev), indio_dev);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed requesting irq, irq = %d\n", irq);
 		return ret;
 	}
+
+	info->regs_phys = mem->start;
+	spin_lock_init(&info->lock);
 
 	info->clk = devm_clk_get(&pdev->dev, "adc");
 	if (IS_ERR(info->clk)) {
@@ -718,11 +987,9 @@ static int s32cc_adc_probe(struct platform_device *pdev)
 	indio_dev->name = dev_name(&pdev->dev);
 	indio_dev->dev.of_node = pdev->dev.of_node;
 	indio_dev->info = &s32cc_adc_iio_info;
-	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->modes = INDIO_DIRECT_MODE | INDIO_BUFFER_SOFTWARE;
 	indio_dev->channels = s32cc_adc_iio_channels;
 	indio_dev->num_channels = ARRAY_SIZE(s32cc_adc_iio_channels);
-	info->buffer_ech_num = 0;
-	info->channels_used = 0;
 
 	memset(info->buffer, 0, sizeof(info->buffer));
 	memset(info->buffered_chan, 0, sizeof(info->buffered_chan));
@@ -737,25 +1004,34 @@ static int s32cc_adc_probe(struct platform_device *pdev)
 	s32cc_adc_cfg_init(info);
 	s32cc_adc_hw_init(info);
 
+	ret = s32cc_adc_dma_probe(info);
+	if (ret)
+		goto s32cc_adc_clock_disable;
+
 	ret = devm_iio_triggered_buffer_setup(&pdev->dev, indio_dev,
-					      &iio_pollfunc_store_time, NULL,
+					      &iio_pollfunc_store_time,
+					      &s32cc_adc_trigger_handler,
 					      &iio_triggered_buffer_setup_ops);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Couldn't initialise the buffer\n");
-		return ret;
+		goto s32cc_adc_dma_clean_up;
 	}
 
 	ret = iio_device_register(indio_dev);
 	if (ret) {
 		dev_err(&pdev->dev, "Couldn't register the device.\n");
-		goto error_iio_device_register;
+		goto s32cc_adc_dma_clean_up;
 	}
 
 	dev_info(&pdev->dev, "Device initialized successfully.\n");
 
 	return 0;
 
-error_iio_device_register:
+s32cc_adc_dma_clean_up:
+	dma_free_coherent(info->dma_chan->device->dev, ADC_DMA_BUFF_SZ,
+			  info->dma_buf.buf, info->rx_dma_buf);
+	dma_release_channel(info->dma_chan);
+s32cc_adc_clock_disable:
 	clk_disable_unprepare(info->clk);
 
 	return ret;
@@ -766,6 +1042,11 @@ static int s32cc_adc_remove(struct platform_device *pdev)
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct s32cc_adc *info = iio_priv(indio_dev);
 
+	s32cc_adc_enable(info, false);
+	dmaengine_terminate_sync(info->dma_chan);
+	dma_free_coherent(info->dma_chan->device->dev, ADC_DMA_BUFF_SZ,
+			  info->dma_buf.buf, info->rx_dma_buf);
+	dma_release_channel(info->dma_chan);
 	iio_device_unregister(indio_dev);
 	clk_disable_unprepare(info->clk);
 

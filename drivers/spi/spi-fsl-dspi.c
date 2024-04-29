@@ -947,30 +947,58 @@ static irqreturn_t dspi_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static void dspi_assert_cs(struct spi_device *spi, bool *cs)
+{
+	if (!spi->cs_gpiod || *cs)
+		return;
+
+	gpiod_set_value_cansleep(spi->cs_gpiod, true);
+	*cs = true;
+}
+
+static void dspi_deassert_cs(struct spi_device *spi, bool *cs)
+{
+	if (!spi->cs_gpiod || !*cs)
+		return;
+
+	gpiod_set_value_cansleep(spi->cs_gpiod, false);
+	*cs = false;
+}
+
 static int dspi_transfer_one_message(struct spi_controller *ctlr,
 				     struct spi_message *message)
 {
 	struct fsl_dspi *dspi = spi_controller_get_devdata(ctlr);
 	struct spi_device *spi = message->spi;
 	struct spi_transfer *transfer;
+	bool cs = false;
 	int status = 0;
 	u32 val = 0;
+	bool cs_change = false;
 
 	message->actual_length = 0;
 
-	/* Put DSPI in running mode */
-	regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, 0);
-	while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
-	       !(val & SPI_SR_TXRXS))
-		;
+	/* Put DSPI in running mode if halted. */
+	regmap_read(dspi->regmap, SPI_MCR, &val);
+	if (val & SPI_MCR_HALT) {
+		regmap_update_bits(dspi->regmap, SPI_MCR, SPI_MCR_HALT, 0);
+		while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
+				!(val & SPI_SR_TXRXS))
+			;
+	}
 
 	list_for_each_entry(transfer, &message->transfers, transfer_list) {
 		dspi->cur_transfer = transfer;
 		dspi->cur_msg = message;
 		dspi->cur_chip = spi_get_ctldata(spi);
+
+		dspi_assert_cs(spi, &cs);
+
 		/* Prepare command word for CMD FIFO */
-		dspi->tx_cmd = SPI_PUSHR_CMD_CTAS(0) |
-			       SPI_PUSHR_CMD_PCS(spi->chip_select);
+		dspi->tx_cmd = SPI_PUSHR_CMD_CTAS(0);
+		if (!spi->cs_gpiod)
+			dspi->tx_cmd |= SPI_PUSHR_CMD_PCS(spi->chip_select);
+
 		if (list_is_last(&dspi->cur_transfer->transfer_list,
 				 &dspi->cur_msg->transfers)) {
 			/* Leave PCS activated after last transfer when
@@ -988,6 +1016,7 @@ static int dspi_transfer_one_message(struct spi_controller *ctlr,
 				dspi->tx_cmd |= SPI_PUSHR_CMD_CONT;
 		}
 
+		cs_change = transfer->cs_change;
 		dspi->tx = transfer->tx_buf;
 		dspi->rx = transfer->rx_buf;
 		dspi->len = transfer->len;
@@ -996,6 +1025,8 @@ static int dspi_transfer_one_message(struct spi_controller *ctlr,
 		regmap_update_bits(dspi->regmap, SPI_MCR,
 				   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF,
 				   SPI_MCR_CLR_TXF | SPI_MCR_CLR_RXF);
+
+		regmap_write(dspi->regmap, SPI_SR, SPI_SR_CLEAR);
 
 		spi_take_timestamp_pre(dspi->ctlr, dspi->cur_transfer,
 				       dspi->progress, !dspi->irq);
@@ -1018,6 +1049,18 @@ static int dspi_transfer_one_message(struct spi_controller *ctlr,
 			break;
 
 		spi_transfer_delay_exec(transfer);
+
+		if (!(dspi->tx_cmd & SPI_PUSHR_CMD_CONT))
+			dspi_deassert_cs(spi, &cs);
+	}
+
+	if (status || !cs_change) {
+		/* Put DSPI in stop mode */
+		regmap_update_bits(dspi->regmap, SPI_MCR,
+				   SPI_MCR_HALT, SPI_MCR_HALT);
+		while (regmap_read(dspi->regmap, SPI_SR, &val) >= 0 &&
+		       val & SPI_SR_TXRXS)
+			;
 	}
 
 	/* Put DSPI in stop mode */
@@ -1055,6 +1098,7 @@ static int dspi_setup(struct spi_device *spi)
 	unsigned char pasc = 0, asc = 0;
 	struct chip_data *chip;
 	unsigned long clkrate;
+	bool cs = true;
 
 	/* Only alloc on first setup */
 	chip = spi_get_ctldata(spi);
@@ -1127,6 +1171,9 @@ static int dspi_setup(struct spi_device *spi)
 		if (spi->mode & SPI_LSB_FIRST)
 			chip->ctar_val |= SPI_CTAR_LSBFE;
 	}
+
+	gpiod_direction_output(spi->cs_gpiod, false);
+	dspi_deassert_cs(spi, &cs);
 
 	spi_set_ctldata(spi, chip);
 
@@ -1449,6 +1496,7 @@ static int dspi_probe(struct platform_device *pdev)
 	ctlr->cleanup = dspi_cleanup;
 	ctlr->slave_abort = dspi_slave_abort;
 	ctlr->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST;
+	ctlr->use_gpio_descriptors = true;
 
 	pdata = dev_get_platdata(&pdev->dev);
 	if (pdata) {

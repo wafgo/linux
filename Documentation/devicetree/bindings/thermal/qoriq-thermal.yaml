@@ -27,6 +27,9 @@ properties:
     maxItems: 1
 
   interrupts:
+    description: |
+      TMU can monitor only one thermal zone using interrupts. For the rest of
+      them, polling should be enabled.
     maxItems: 1
 
   fsl,tmu-range:
@@ -57,6 +60,25 @@ properties:
       boolean, if present, the TMU registers are little endian. If absent,
       the default is big endian.
     type: boolean
+
+  tmu-alpf:
+    description: |
+      It is used by the TMU for the average temperature computation.
+      If present, it will replace the ALPF default value used in the driver
+      (0.125). The average temperature is calculated using the formula:
+      ALPF x Current_Temp + (1 - ALPF) x Average_Temp.
+      The property is read only in TMU version 2 case.
+
+  tmu-rate-filter:
+    description: |
+      TMU is reporting sometimes large errors in temperature measurement,
+      for example, the temperature will go up by 40 degrees on one sample
+      and then down 40 degrees on the next sample.
+      This property is used to filter out the erroneous measurements and should
+      contain the maximum acceptable difference between two consecutive TMU
+      samples. The workaround applies only for the site monitored with IRQ and
+      only for the immediate temperature. The average temperature will be still
+      computed based on the erroneous value.
 
   clocks:
     maxItems: 1
@@ -152,6 +174,7 @@ examples:
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>
     #include <dt-bindings/clock/s32cc-scmi-clock.h>
+    #include <dt-bindings/thermal/qoriq_thermal.h>
 
     tmu@400a8000 {
         compatible = "nxp,s32cc-tmu";
@@ -166,6 +189,7 @@ examples:
                               <3 0x167 0x1f>;
         interrupts = <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>;
         #thermal-sensor-cells = <1>;
+        tmu-alpf = <QORIQ_TMR_ALPF_0_125>;
         status = "okay";
     };
 

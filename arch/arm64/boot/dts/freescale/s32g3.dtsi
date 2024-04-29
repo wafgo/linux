@@ -19,16 +19,32 @@
 	cpus {
 		cpu-map {
 			cluster0 {
+				core0 {
+					cpu = <&cpu0>;
+				};
+
+				core1 {
+					cpu = <&cpu1>;
+				};
+
 				core2 {
-					cpu = <&cpu4>;
+					cpu = <&cpu2>;
 				};
 
 				core3 {
-					cpu = <&cpu5>;
+					cpu = <&cpu3>;
 				};
 			};
 
 			cluster1 {
+				core0 {
+					cpu = <&cpu4>;
+				};
+
+				core1 {
+					cpu = <&cpu5>;
+				};
+
 				core2 {
 					cpu = <&cpu6>;
 				};
@@ -39,22 +55,64 @@
 			};
 		};
 
-		cpu4: cpu@2 {
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <0x0>;
+			enable-method = "psci";
+			clocks = <&dfs S32CC_SCMI_PERF_A53>;
+			next-level-cache = <&cluster0_l2_cache>;
+			#cooling-cells = <2>;
+		};
+
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <0x1>;
+			enable-method = "psci";
+			clocks = <&dfs S32CC_SCMI_PERF_A53>;
+			next-level-cache = <&cluster0_l2_cache>;
+			#cooling-cells = <2>;
+		};
+
+		cpu2: cpu@2 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
 			reg = <0x2>;
 			enable-method = "psci";
 			clocks = <&dfs S32CC_SCMI_PERF_A53>;
 			next-level-cache = <&cluster0_l2_cache>;
+			#cooling-cells = <2>;
 		};
 
-		cpu5: cpu@3 {
+		cpu3: cpu@3 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
 			reg = <0x3>;
 			enable-method = "psci";
 			clocks = <&dfs S32CC_SCMI_PERF_A53>;
 			next-level-cache = <&cluster0_l2_cache>;
+			#cooling-cells = <2>;
+		};
+
+		cpu4: cpu@100 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <0x100>;
+			enable-method = "psci";
+			clocks = <&dfs S32CC_SCMI_PERF_A53>;
+			next-level-cache = <&cluster1_l2_cache>;
+			#cooling-cells = <2>;
+		};
+
+		cpu5: cpu@101 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			reg = <0x101>;
+			enable-method = "psci";
+			clocks = <&dfs S32CC_SCMI_PERF_A53>;
+			next-level-cache = <&cluster1_l2_cache>;
+			#cooling-cells = <2>;
 		};
 
 		cpu6: cpu@102 {
@@ -64,6 +122,7 @@
 			enable-method = "psci";
 			clocks = <&dfs S32CC_SCMI_PERF_A53>;
 			next-level-cache = <&cluster1_l2_cache>;
+			#cooling-cells = <2>;
 		};
 
 		cpu7: cpu@103 {
@@ -73,6 +132,7 @@
 			enable-method = "psci";
 			clocks = <&dfs S32CC_SCMI_PERF_A53>;
 			next-level-cache = <&cluster1_l2_cache>;
+			#cooling-cells = <2>;
 		};
 	};
 
@@ -216,4 +276,8 @@
 			       3 0xa2  0x0
 			       4 0x162 0x1f
 			       5 0x16c 0x1f>;
+};
+
+&llce_spi2 {
+	nxp,reset-at-underrun;
 };

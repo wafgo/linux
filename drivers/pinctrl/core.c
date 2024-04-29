@@ -766,6 +766,44 @@ bool pinctrl_gpio_can_use_line(unsigned gpio)
 }
 EXPORT_SYMBOL_GPL(pinctrl_gpio_can_use_line);
 
+int pinctrl_gpio_get_mux_owner(unsigned int gpio, char *buffer,
+			       unsigned long size)
+{
+	struct pinctrl_gpio_range *range;
+	struct pinctrl_dev *pctldev;
+	const struct pin_desc *pd;
+	const char *owner = NULL;
+	int pin, ret = -EINVAL;
+
+	if (pinctrl_get_device_gpio_range(gpio, &pctldev, &range))
+		return ret;
+
+	mutex_lock(&pctldev->mutex);
+	pin = gpio_to_pin(range, gpio);
+	pd = pin_desc_get(pctldev, pin);
+	if (!pd)
+		goto err;
+
+	if (pd->gpio_owner) {
+		owner = pd->gpio_owner;
+		ret = 0;
+		goto err;
+	}
+
+	if (pd->mux_owner) {
+		owner = pd->mux_owner;
+		ret = 0;
+		goto err;
+	}
+
+err:
+	if (!ret)
+		strscpy(buffer, owner, size);
+	mutex_unlock(&pctldev->mutex);
+
+	return ret;
+}
+
 /**
  * pinctrl_gpio_request() - request a single pin to be used as GPIO
  * @gpio: the GPIO pin number from the GPIO subsystem number space
@@ -1239,17 +1277,17 @@ static void pinctrl_link_add(struct pinctrl_dev *pctldev,
 static int pinctrl_commit_state(struct pinctrl *p, struct pinctrl_state *state)
 {
 	struct pinctrl_setting *setting, *setting2;
-	struct pinctrl_state *old_state = p->state;
+	struct pinctrl_state *old_state = READ_ONCE(p->state);
 	int ret;
 
-	if (p->state) {
+	if (old_state) {
 		/*
 		 * For each pinmux setting in the old state, forget SW's record
 		 * of mux owner for that pingroup. Any pingroups which are
 		 * still owned by the new state will be re-acquired by the call
 		 * to pinmux_enable_setting() in the loop below.
 		 */
-		list_for_each_entry(setting, &p->state->settings, node) {
+		list_for_each_entry(setting, &old_state->settings, node) {
 			if (setting->type != PIN_MAP_TYPE_MUX_GROUP)
 				continue;
 			pinmux_disable_setting(setting);

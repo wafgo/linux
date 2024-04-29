@@ -440,8 +440,7 @@ static void dw_pcie_ep_stop(struct pci_epc *epc)
 	struct dw_pcie_ep *ep = epc_get_drvdata(epc);
 	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
 
-	if (pci->ops && pci->ops->stop_link)
-		pci->ops->stop_link(pci);
+	dw_pcie_stop_link(pci);
 }
 
 static int dw_pcie_ep_start(struct pci_epc *epc)
@@ -449,10 +448,7 @@ static int dw_pcie_ep_start(struct pci_epc *epc)
 	struct dw_pcie_ep *ep = epc_get_drvdata(epc);
 	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
 
-	if (!pci->ops || !pci->ops->start_link)
-		return -EINVAL;
-
-	return pci->ops->start_link(pci);
+	return dw_pcie_start_link(pci);
 }
 
 static const struct pci_epc_features*
@@ -466,7 +462,7 @@ dw_pcie_ep_get_features(struct pci_epc *epc, u8 func_no, u8 vfunc_no)
 	return ep->ops->get_features(ep);
 }
 
-#ifdef CONFIG_PCI_EPF_TEST
+#if (IS_ENABLED(CONFIG_PCI_EPF_TEST))
 static int dw_pcie_ep_start_dma(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 		bool dir, dma_addr_t src, dma_addr_t dst, u32 len,
 		struct completion *complete)
@@ -497,7 +493,7 @@ static const struct pci_epc_ops epc_ops = {
 	.start			= dw_pcie_ep_start,
 	.stop			= dw_pcie_ep_stop,
 	.get_features		= dw_pcie_ep_get_features,
-#if (defined(CONFIG_PCI_DW_DMA) && defined(CONFIG_PCI_EPF_TEST))
+#if (IS_ENABLED(CONFIG_PCI_EPF_TEST))
 	.start_dma		= dw_pcie_ep_start_dma,
 #endif
 };

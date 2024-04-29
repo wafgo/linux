@@ -288,14 +288,19 @@ static int set_controller_mode(struct mbox_chan *conf_chan,
 	return 0;
 }
 
-static int start_llce_can(struct llce_can *llce)
-{
-	return set_controller_mode(llce->config, LLCE_CAN_T_START);
-}
-
 static int stop_llce_can(struct llce_can *llce)
 {
 	return set_controller_mode(llce->config, LLCE_CAN_T_STOP);
+}
+
+static int start_llce_can(struct llce_can *llce)
+{
+	int ret = set_controller_mode(llce->config, LLCE_CAN_T_START);
+
+	if (ret)
+		stop_llce_can(llce);
+
+	return ret;
 }
 
 static int get_ntseg1(const struct can_bittiming *bt, u32 *tseg1)
@@ -617,15 +622,16 @@ static netdev_tx_t llce_can_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 
 	netif_stop_queue(dev);
+	/* Put the skb on can loopback stack */
+	can_put_echo_skb(skb, dev, 0, 0);
 
 	ret = mbox_send_message(llce->tx, &msg);
 	if (ret < 0) {
+		can_free_echo_skb(dev, 0, NULL);
 		netdev_err(dev, "Failed to send CAN frame\n");
 		return NETDEV_TX_BUSY;
 	}
 
-	/* Put the skb on can loopback stack */
-	can_put_echo_skb(skb, dev, 0, 0);
 
 	return NETDEV_TX_OK;
 }
@@ -714,9 +720,8 @@ static int llce_init_can_priv(struct llce_can *llce, struct device *dev)
 	can->data_bittiming_const = &llce_can_data_bittiming;
 	can->do_set_mode = &llce_can_set_mode;
 	can->ctrlmode_supported = CAN_CTRLMODE_FD |
-		CAN_CTRLMODE_FD_NON_ISO |
-		CAN_CTRLMODE_LOOPBACK |
-		CAN_CTRLMODE_LISTENONLY;
+		CAN_CTRLMODE_FD_NON_ISO | CAN_CTRLMODE_LOOPBACK |
+		CAN_CTRLMODE_BERR_REPORTING | CAN_CTRLMODE_LISTENONLY;
 
 	return 0;
 }
