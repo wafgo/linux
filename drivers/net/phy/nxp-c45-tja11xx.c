@@ -1253,37 +1253,6 @@ static int tja1120_config_intr(struct phy_device *phydev)
 	return nxp_c45_config_intr(phydev);
 }
 
-static int tja1103_config_intr(struct phy_device *phydev)
-{
-	int ret;
-
-	/* We can't disable the FUSA IRQ for TJA1103, but we can clean it up. */
-	ret = phy_write_mmd(phydev, MDIO_MMD_VEND1, VEND1_ALWAYS_ACCESSIBLE,
-			    FUSA_PASS);
-	if (ret)
-		return ret;
-
-	return nxp_c45_config_intr(phydev);
-}
-
-static int tja1120_config_intr(struct phy_device *phydev)
-{
-	int ret;
-
-	if (phydev->interrupts == PHY_INTERRUPT_ENABLED)
-		ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1,
-				       TJA1120_GLOBAL_INFRA_IRQ_EN,
-				       TJA1120_DEV_BOOT_DONE);
-	else
-		ret = phy_clear_bits_mmd(phydev, MDIO_MMD_VEND1,
-					 TJA1120_GLOBAL_INFRA_IRQ_EN,
-					 TJA1120_DEV_BOOT_DONE);
-	if (ret)
-		return ret;
-
-	return nxp_c45_config_intr(phydev);
-}
-
 static irqreturn_t nxp_c45_handle_interrupt(struct phy_device *phydev)
 {
 	const struct nxp_c45_phy_data *data = nxp_c45_get_data(phydev);
