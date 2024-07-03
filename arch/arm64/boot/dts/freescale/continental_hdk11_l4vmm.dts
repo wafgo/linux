@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright 2023 Continental Automotive Technologies GmbH
+ */
+
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
 #include "s32g2.dtsi"
@@ -6,15 +11,166 @@
 / {
 	model = "Continental HDK v1.1";
 	chosen {
-		stdout-path = "serial1:115200n8";
+		stdout-path = "serial8:115200n8";
 	};
 
 	usbphynop: usbphynop {
 		compatible = "usb-nop-xceiv";
 		#phy-cells = <0>;
 	};
+
+	vmm: l4vmm {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges = <0x0 0x0 0xf1100000 0x40000>;
+
+		virtio_rng@15000 {
+			compatible = "virtio,mmio";
+			reg = <0x20000 0x100 0 0>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "rng";
+			l4vmm,virtiocap = "rng";
+			l4vmm,init-kaslr-seed;
+		};
+
+		hvc0: virtio_uart@20000 {
+			compatible = "virtio,mmio";
+			reg = <0x20000 0x100>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "console";
+			status = "okay";
+		};
+
+		virtio_net@10000 {
+			compatible = "virtio,mmio";
+			reg = <0x10000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "net";
+			status = "okay";
+		};
+
+		virtio_net@11000 {
+			compatible = "virtio,mmio";
+			reg = <0x11000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "net1";
+			status = "okay";
+		};
+
+		virtio_net@12000 {
+			compatible = "virtio,mmio";
+			reg = <0x12000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "net2";
+			status = "okay";
+		};
+
+		virtio_net@13000 {
+			compatible = "virtio,mmio";
+			reg = <0x13000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "net3";
+			status = "okay";
+		};
+
+		virtio_net@14000 {
+			compatible = "virtio,mmio";
+			reg = <0x14000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "net4";
+			status = "okay";
+		};
+
+		virtio_ser@21000 {
+			compatible = "virtio,mmio";
+			reg = <0x21000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "filed1";
+			status = "okay";
+		};
+
+		virtio_ser@22000 {
+			compatible = "virtio,mmio";
+			reg = <0x22000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 141 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "filed2";
+			status = "okay";
+		};
+
+		virtio_ser@23000 {
+			compatible = "virtio,mmio";
+			reg = <0x23000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 142 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "ser2";
+			status = "okay";
+		};
+
+		virtio_ser@24000 {
+			compatible = "virtio,mmio";
+			reg = <0x24000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 143 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "ser3";
+			status = "okay";
+		};
+
+		virtio_ser@25000 {
+			compatible = "virtio,mmio";
+			reg = <0x25000 0x200>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "ser4";
+			status = "okay";
+		};
+
+		virtio_block@2000 {
+			compatible = "virtio,mmio";
+			reg = <0x2000 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
+			l4vmm,vdev = "proxy";
+			l4vmm,virtiocap = "disk1";
+			status = "okay";
+		};
+	};
 };
 
+&aliases {
+	serial8= &hvc0;
+};
+
+&uart1 {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&psci {
+	method = "hvc";
+};
 
 &pfe_mdio2 {
 	/* AQR113 on S32G-PROCEVB3-S */
@@ -443,7 +599,7 @@
 	pinctrl-0 = <&sd0_pins_default>;
 	pinctrl-1 = <&sd0_pins_100mhz>;
 	pinctrl-2 = <&sd0_pins_200mhz>;
-	status = "okay";
+	status = "disabled";
 };
 
 &can0 {
@@ -479,7 +635,7 @@
 };
 
 &pit0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &pit1 {
@@ -493,13 +649,13 @@
 		can0_grp0 {
 			pinmux = <S32CC_PINMUX(44, FUNC1)>; /*PC_12 -> TXD CANFD FAS*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_150MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		can0_grp1 {
 			pinmux = <S32CC_PINMUX(43, FUNC0)>; /*PC_11 -> RXD CANFD FAS*/
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		can0_grp2 {
@@ -511,13 +667,13 @@
 		can2_grp0 {
 			pinmux = <S32CC_PINMUX(27, FUNC2)>; /* PB12*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_150MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		can2_grp1 {
 			pinmux = <S32CC_PINMUX(28, FUNC0)>; /*PB11*/
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		can2_grp2 {
@@ -529,7 +685,7 @@
 		pinmux = <S32CC_PINMUX(98, FUNC0)>,/*PG02 -> N_RESET_USS*/
 		         <S32CC_PINMUX(175, FUNC0)>; /*PK15 -> EN_USS*/
 		output-enable;
-		slew-rate = <S32CC_SLEW_83MHZ>;
+		slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 	};
 
 	dspi0_pins: dspi0_pins {
@@ -537,26 +693,26 @@
 			pinmux = <S32CC_PINMUX(25, FUNC5)>, /*PB_09 CS1 -> RTL9072 SW1*/
 			         <S32CC_PINMUX(26, FUNC3)>; /*PB_10 CS2 -> RTL9072 SW2*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
 		dspi0_grp1 {
 			pinmux = <S32CC_PINMUX(15, FUNC1)>; /*PA_15 -> MOSI*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi0_grp2 {
 			pinmux = <S32CC_PINMUX(13, FUNC1)>; /*PA_13 -> SCK*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi0_grp3 {
 			pinmux = <S32CC_PINMUX(14, FUNC0)>; /*PA_14 -> MISO*/
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
@@ -569,26 +725,26 @@
 		dspi1_grp0 {
 			pinmux = <S32CC_PINMUX(7, FUNC2)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
 		dspi1_grp1 {
 			pinmux = <S32CC_PINMUX(6, FUNC2)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi1_grp2 {
 			pinmux = <S32CC_PINMUX(8, FUNC3)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi1_grp3 {
 			pinmux = <S32CC_PINMUX(95, FUNC0)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
@@ -601,26 +757,26 @@
 		dspi2_grp0 {
 			pinmux = <S32CC_PINMUX(155, FUNC2)>; /*PJ_11 -> CS*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
 		dspi2_grp1 {
 			pinmux = <S32CC_PINMUX(157, FUNC2)>; /*PJ_13 -> MOSI*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi2_grp2 {
 			pinmux = <S32CC_PINMUX(153, FUNC2)>; /*PJ_09 -> SCK*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi2_grp3 {
 			pinmux = <S32CC_PINMUX(158, FUNC0)>; /*PJ_14 -> MISO*/
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
@@ -635,13 +791,13 @@
 		dspi1slave_grp0 {
 			pinmux = <S32CC_PINMUX(6, FUNC2)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi1slave_grp1 {
 			pinmux = <S32CC_PINMUX(7, FUNC2)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi1slave_grp2 {
@@ -653,13 +809,13 @@
 		dspi1slave_grp3 {
 			pinmux = <S32CC_PINMUX(8, FUNC3)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi1slave_grp4 {
 			pinmux = <S32CC_PINMUX(95, FUNC0)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 	};
@@ -669,13 +825,13 @@
 			pinmux = <S32CC_PINMUX(9, FUNC3)>,
 				 <S32CC_PINMUX(11, FUNC3)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		dspi5_grp1 {
 			pinmux = <S32CC_PINMUX(10, FUNC0)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
@@ -686,7 +842,7 @@
 		dspi5_grp3 {
 			pinmux = <S32CC_PINMUX(12, FUNC3)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 	};
@@ -698,7 +854,7 @@
 			drive-open-drain;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_83MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		i2c1_grp1 {
@@ -714,7 +870,7 @@
 				 <S32CC_PINMUX(165, FUNC0)>;
 			drive-open-drain;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		i2c1_gpio_grp1 {
@@ -730,7 +886,7 @@
 			drive-open-drain;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_83MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		i2c2_grp1 {
@@ -751,7 +907,7 @@
 				 <S32CC_PINMUX(22, FUNC0)>;
 			drive-open-drain;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 	};
@@ -762,7 +918,7 @@
 			drive-open-drain;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_83MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		i2c4_grp1 {
@@ -775,7 +931,7 @@
 			drive-open-drain;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_83MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 	};
 
@@ -785,7 +941,7 @@
 				 <S32CC_PINMUX(34, FUNC0)>;
 			drive-open-drain;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		i2c4_gpio_grp1 {
@@ -820,7 +976,7 @@
 				 <S32CC_PINMUX(112, FUNC1)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		usbotg_grp2 {
@@ -828,13 +984,13 @@
 				 <S32CC_PINMUX(185, FUNC0)>,
 				 <S32CC_PINMUX(187, FUNC0)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		usbotg_grp3 {
 			pinmux = <S32CC_PINMUX(186, FUNC1)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 	};
 
@@ -846,7 +1002,7 @@
 				 <S32CC_PINMUX(63, FUNC5)>, /*PD15 -> P9_TXD3*/
 				 <S32CC_PINMUX(185, FUNC5)>; /*PL09 -> P9_TX_EN*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		pfe2rgmiia_grp1 {
@@ -857,7 +1013,7 @@
 				 <S32CC_PINMUX(64, FUNC0)>, /*PE00 -> P9_RX_CLK*/
 				 <S32CC_PINMUX(65, FUNC0)>; /*PE01 -> P9_RX_DV*/
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		pfe2rgmiia_grp2 {
@@ -873,7 +1029,7 @@
 		pfe2rgmiia_grp3 {
 			pinmux = <S32CC_PINMUX(184, FUNC5)>; /*PL08 -> P9_TX_CLK*/
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 	};
@@ -882,14 +1038,14 @@
 		gmac0mdioc_grp0 {
 			pinmux = <S32CC_PINMUX(60, FUNC1)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		gmac0mdioc_grp1 {
 			pinmux = <S32CC_PINMUX(61, FUNC1)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		gmac0mdioc_grp2 {
@@ -901,7 +1057,7 @@
 		gmac0rgmiic_grp0 {
 			pinmux = <S32CC_PINMUX(66, FUNC1)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 			bias-pull-up;
 		};
 
@@ -922,7 +1078,7 @@
 				 <S32CC_PINMUX(70, FUNC1)>,
 				 <S32CC_PINMUX(71, FUNC1)>;
 			output-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		gmac0rgmiic_grp3 {
@@ -933,7 +1089,7 @@
 				 <S32CC_PINMUX(76, FUNC0)>,
 				 <S32CC_PINMUX(77, FUNC0)>;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 	};
 
@@ -948,7 +1104,7 @@
 				 <S32CC_PINMUX(180, FUNC2)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		ftm0_grp2 {
@@ -956,7 +1112,7 @@
 				 <S32CC_PINMUX(181, FUNC3)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		ftm0_grp3 {
@@ -977,7 +1133,7 @@
 			pinmux = <S32CC_PINMUX(29, FUNC3)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		ftm1_grp1 {
@@ -992,14 +1148,14 @@
 			pinmux = <S32CC_PINMUX(31, FUNC4)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		ftm1_grp4 {
 			pinmux = <S32CC_PINMUX(32, FUNC2)>;
 			output-enable;
 			input-enable;
-			slew-rate = <S32CC_SLEW_208MHZ>;
+			slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>;
 		};
 
 		ftm1_grp5 {
@@ -1237,7 +1393,7 @@
 	/* misc_signals_bi: mis_signals_bi { */
 	/* 	pinmux = <S32CC_PINMUX(120, FUNC0)>;/\*PH08 -> GPIO0_PCIE_SW*\/ */
 	/* 	input-enable; */
-	/* 	slew-rate = <S32CC_SLEW_150MHZ>; */
+	/* 	slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>; */
 	/* }; */
 	
 &gpio {
@@ -1399,44 +1555,4 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&ftm1_pins>;
 	status = "okay";
-};
-
-&psci {
-		method = "hvc";
-};
-
-/ {
-    l4vmm {
-        #address-cells = <1>;
-        #size-cells = <1>;
-        compatible = "simple-bus";
-	ranges = <0x00 0x00 0xf1100000 0x40000>;
-
-        apb_dummy_pclk: dummy_clk {
-            compatible = "fixed-clock";
-            #clock-cells = <0>;
-            clock-frequency = <1000000>;
-        };
-
-        virtio_uart@20000 {
-            compatible = "virtio,mmio";
-            reg = <0x20000 0x100>;
-            interrupt-parent = <&gic>;
-            interrupts = <0 122 4>;
-	    l4vmm,vdev = "console";
-	    /* l4vmm,vcon_cap = "guest_log"; */
-            /* To be used instead of pl011 UART */
-            status = "okay";
-        };
-
-        virtio_net@10000 {
-            compatible = "virtio,mmio";
-            reg = <0x10000 0x200>;
-            interrupt-parent = <&gic>;
-            interrupts = <0 123 4>;
-            l4vmm,vdev = "proxy";
-            l4vmm,virtiocap = "net";
-            l4vmm,no-notify = <1>;
-        };
-    };
 };

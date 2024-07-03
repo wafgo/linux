@@ -26,7 +26,7 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
-	aliases {
+	aliases: aliases {
 		can0 = &can0;
 		can1 = &can1;
 		can2 = &can2;
@@ -84,12 +84,11 @@
 
 	generic_timer: timer {
 		compatible = "arm,armv8-timer";
-		interrupts = <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW>,
-			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW>,
-			     <GIC_PPI 12 IRQ_TYPE_LEVEL_LOW>,
-			     <GIC_PPI 13 IRQ_TYPE_LEVEL_LOW>,
-			     <GIC_PPI 14 IRQ_TYPE_LEVEL_LOW>;
-		interrupt-names = "hyp-phys", "virt", "hyp-virt", "sec-phys", "phys";
+		interrupts = <GIC_PPI 13 IRQ_TYPE_LEVEL_LOW>, /* sec-phys */
+			     <GIC_PPI 14 IRQ_TYPE_LEVEL_LOW>, /* phys */
+			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW>, /* virt */
+			     <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW>, /* hyp-phys */
+			     <GIC_PPI 12 IRQ_TYPE_LEVEL_LOW>; /* hyp-virt */
 		arm,no-tick-in-suspend;
 	};
 
@@ -179,7 +178,7 @@
 			};
 		};
 
-		psci {
+		psci: psci {
 			compatible = "arm,psci-1.0";
 			method = "smc";
 		};
