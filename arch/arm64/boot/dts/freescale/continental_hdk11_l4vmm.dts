@@ -9,11 +9,44 @@
 #include "micron-mt35xu01g-qspi-nor.dtsi"
 
 / {
-	model = "Continental HDK v1.1";
+	model = "Virtual ADC435";
+
 	chosen {
 		stdout-path = "serial8:115200n8";
 	};
 
+	pmu {
+		status = "disabled";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00 0x00 0x00 0x80000000>;
+		l4vmm,dscap = "ram";
+	};
+
+	memory@1 {
+		device_type = "memory";
+		reg = <0x00 0x00 0x00 0x80000000>;
+		l4vmm,dscap = "ram2";
+	};
+
+	vm_ctl@ff802000 {
+		compatible = "l4,psm";
+		reg = <0x00 0xff802000 0x00 0x1000>;
+		l4vmm,vbus-dev = "l4,psm";
+		status = "disabled";
+	};
+	
+	reserved-memory {
+		pfebufs@a0000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x00 0xa0000000 0x00 0x3e0000>;
+			no-map;
+			l4vmm,force-enable;
+		};
+	};
+		
 	usbphynop: usbphynop {
 		compatible = "usb-nop-xceiv";
 		#phy-cells = <0>;
@@ -32,6 +65,7 @@
 			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "rng";
 			l4vmm,virtiocap = "rng";
+			status = "disabled";
 			l4vmm,init-kaslr-seed;
 		};
 
@@ -61,7 +95,7 @@
 			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "net1";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_net@12000 {
@@ -71,7 +105,7 @@
 			interrupts = <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "net2";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_net@13000 {
@@ -81,7 +115,7 @@
 			interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "net3";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_net@14000 {
@@ -91,7 +125,7 @@
 			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "net4";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_ser@21000 {
@@ -101,7 +135,7 @@
 			interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "filed1";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_ser@22000 {
@@ -111,7 +145,7 @@
 			interrupts = <GIC_SPI 141 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "filed2";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_ser@23000 {
@@ -121,7 +155,7 @@
 			interrupts = <GIC_SPI 142 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "ser2";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_ser@24000 {
@@ -131,7 +165,7 @@
 			interrupts = <GIC_SPI 143 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "ser3";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_ser@25000 {
@@ -141,7 +175,7 @@
 			interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>;
 			l4vmm,vdev = "proxy";
 			l4vmm,virtiocap = "ser4";
-			status = "okay";
+			status = "disabled";
 		};
 
 		virtio_block@2000 {
@@ -156,15 +190,53 @@
 	};
 };
 
+&pci_shared_memory0 {
+	device_type = "memory";
+	status = "disabled";
+};
+
+&pci_shared_memory1 {
+	device_type = "memory";
+	status = "disabled";
+};
+
+&hse_reserved {
+	device_type = "memory";
+	status = "disabled";
+};
+
+&pfe_reserved_bmu2 {
+	device_type = "memory";
+	status = "disabled";
+};
+
+&pfe_reserved_rt{
+	device_type = "memory";
+	status = "disabled";
+};
+
+&pfe_reserved {
+	device_type = "memory";
+};
+
+&pfe_reserved_bdr{
+	device_type = "memory";
+	status = "disabled";
+};
+
 &aliases {
 	serial8= &hvc0;
+};
+
+&uart0 {
+	status = "disabled";
 };
 
 &uart1 {
 	status = "disabled";
 };
 
-&uart0 {
+&uart2 {
 	status = "disabled";
 };
 
@@ -182,22 +254,22 @@
 
 &serdes0 {
 	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
-	status = "okay";
+	status = "disabled";
 };
 
 &serdes1 {
 	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
-	status = "okay";
+	status = "disabled";
 };
 
 &pcie0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &pcie1 {
 	compatible = "nxp,s32cc-pcie-ep";
 	num-lanes = <2>;
-	status = "okay";
+	status = "disabled";
 };
 
 &pfe_netif0 {
@@ -207,7 +279,7 @@
 };
 
 &usbmisc {
-	status = "okay";
+	status = "disabled";
 };
 
 &usbotg {
@@ -227,7 +299,7 @@
 	pinctrl-1 = <&i2c1_gpio_pins>;
 	scl-gpios = <&gpio 163 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	sda-gpios = <&gpio 165 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
-	status = "okay";
+	status = "disabled";
 };
 
 &i2c2 {
@@ -590,7 +662,7 @@
 	pinctrl-1 = <&i2c4_gpio_pins>;
 	scl-gpios = <&gpio 34 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	sda-gpios = <&gpio 33 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
-	status = "okay";
+	status = "disabled";
 };
 
 &usdhc0 {
@@ -605,33 +677,33 @@
 &can0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can0_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &can2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can2_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &fccu {
-	status = "okay";
+	status = "disabled";
 };
 
 &swt3 {
-	status = "okay";
+	status = "disabled";
 };
 
 &swt4 {
-	status = "okay";
+	status = "disabled";
 };
 
 &swt5 {
-	status = "okay";
+	status = "disabled";
 };
 
 &swt6 {
-	status = "okay";
+	status = "disabled";
 };
 
 &pit0 {
@@ -639,12 +711,12 @@
 };
 
 &pit1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &pinctrl {
 	status = "okay";
-
+	l4vmm,force-enable;
 	can0_pins: can0_pins {
 		can0_grp0 {
 			pinmux = <S32CC_PINMUX(44, FUNC1)>; /*PC_12 -> TXD CANFD FAS*/
@@ -1169,76 +1241,76 @@
 };
 
 &llce_dte_sram {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_ppe_rx_sram {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_ppe_tx_sram {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_frpe_sram {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_shmem {
-	status = "okay";
+	status = "disabled";
 };
 
 
 &llce_can1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can3 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can4 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can5 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can6 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can7 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can8 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can9 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can10 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can11 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can12 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can13 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can14 {
@@ -1305,26 +1377,6 @@
 &pfe_mdio2 {
 	/* unused */
 	status = "disabled";
-	/* /\* KSZ9031RNX over SJA1105Q P3 *\/ */
-	/* pfe_mdio_a_phy2: ethernet-phy@2 { */
-	/* 	reg = <2>; */
-	/* }; */
-	/* /\* KSZ9031RNX over SJA1105Q P4 *\/ */
-	/* pfe_mdio_a_phy3: ethernet-phy@3 { */
-	/* 	reg = <3>; */
-	/* }; */
-
-	/* /\* TJA1102 over SJA1105Q P1 *\/ */
-	/* pfe_mdio_a_phy6: ethernet-phy@6 { */
-	/* 	#address-cells = <1>; */
-	/* 	#size-cells = <0>; */
-	/* 	reg = <6>; */
-
-	/* 	/\* TJA1102 over SJA1105Q P2 *\/ */
-	/* 	pfe_mdio_a_phy7: ethernet-phy@7 { */
-	/* 		reg = <7>; */
-	/* 	}; */
-	/* }; */
 };
 
 &pfe_netif1 {
@@ -1342,11 +1394,11 @@
 };
 
 &edma0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &edma1 {
-	status = "okay";
+	status = "disabled";
 };
 
 
@@ -1530,7 +1582,7 @@
 	pinctrl-names = "default", "slave";
 	#address-cells = <1>;
 	#size-cells = <0>;
-	status = "okay";
+	status = "disabled";
 
 	spidev0: spidev@0 {
 		compatible = "atmel,atic176"; /* ??? there is no driver for it*/
@@ -1548,11 +1600,80 @@
 &pwm0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&ftm0_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &pwm1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&ftm1_pins>;
-	status = "okay";
+	status = "disabled";
 };
+
+/* Thats dangerous, here we place the bootstrap image ...
+we need to move it to another location
+*/ 
+&ddr_errata_reserved {
+	device_type = "memory";
+	status = "disabled";
+};
+
+&ddr_errata {
+	status = "disabled";
+};
+
+&rtc0 {
+	status = "disabled";
+};
+
+&nvram {
+	status = "disabled";
+};
+
+&nvram1 {
+	status = "disabled";
+};
+
+&ocotp {
+	status = "disabled";
+};
+
+&tmu {
+	status = "disabled";
+};
+
+&stm0 {
+	status = "disabled";
+};
+
+&stm1 {
+	status = "disabled";
+};
+
+&stm7 {
+	status = "disabled";
+};
+
+&hse {
+	status = "disabled";
+};
+
+&adc0 {
+	status = "disabled";
+};
+
+&adc1 {
+	status = "disabled";
+};
+
+&perf {
+	status = "disabled";
+};
+
+&mscm0 {
+	status = "disabled";
+};
+
+&llce {
+	status = "disabled";
+};
+
