@@ -206,22 +206,23 @@
 };
 
 &pfe_reserved_bmu2 {
-	device_type = "memory";
-	status = "disabled";
+	status = "enabled";
+	l4vmm,force-enable;
 };
 
 &pfe_reserved_rt{
-	device_type = "memory";
-	status = "disabled";
+	status = "enabled";
+	l4vmm,force-enable;
 };
 
 &pfe_reserved {
-	device_type = "memory";
+	status = "enabled";
+	l4vmm,force-enable;
 };
 
 &pfe_reserved_bdr{
-	device_type = "memory";
-	status = "disabled";
+	status = "enabled";
+	l4vmm,force-enable;
 };
 
 &aliases {
