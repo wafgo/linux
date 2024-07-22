@@ -15,7 +15,9 @@ CORE.ASSIGN 1. 2. 3. 4.
 SYStem.Mode.Attach
 
 ; load linux kernel symbols
-Data.LOAD.Elf ../vmlinux /NoCODE
+Data.LOAD.Elf /home/uia67865/mnt/ext_ssd/cadge/bsp40/build_hdk11-s32g2-micron/tmp/work/hdk11_s32g2_micron-conti-linux-musl/linux-s32/5.15.145-r0/build/vmlinux /NoCODE /StripPart "/usr/src/kernel"
+
+sYmbol.SourcePATH.SetBaseDir /home/uia67865/mnt/ext_ssd/cadge/bsp40/build_hdk11-s32g2-micron/tmp/work/hdk11_s32g2_micron-conti-linux-musl/linux-s32/5.15.145-r0/git
 ; data.load.elf ~/devel/github/arm-trusted-firmware/build/conti_hdk_1_1/debug/bl31/bl31.elf /NoCODE /NoClear
 
 ; Debugger Address Translation
