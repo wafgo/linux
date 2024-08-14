@@ -177,6 +177,9 @@ static const struct flash_info macronix_parts[] = {
 			SPI_NOR_OCTAL_READ | SPI_NOR_4B_OPCODES |
 			SPI_NOR_OCTAL_DTR_READ | SPI_NOR_IO_MODE_EN_VOLATILE)
 		.fixups = &mx25uw51245g_fixups },
+	{ "mx66um1g45g",  INFO(0xc2803b, 0, 64 * 1024, 2048,
+			       SECT_4K | SPI_NOR_DUAL_READ |
+			      SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
 	{ "mx66l51235f", INFO(0xc2201a, 0, 64 * 1024, 1024,
 			      SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ |
 			      SPI_NOR_4B_OPCODES) },
