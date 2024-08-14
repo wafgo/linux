@@ -1206,18 +1206,18 @@
 	#size-cells = <0>;
 	status = "okay";
 
-	rtl972_sw1: spidev@0 {
-		compatible = "realtek,rtl9072-aa";
+	rtl972_sw1: spidev@1 {
+		compatible = "rohm,dh2228fv";
 		spi-max-frequency = <4000000>;
-		reg = <0>;
+		reg = <1>;
 		fsl,spi-cs-sck-delay = <100>;
 		fsl,spi-sck-cs-delay = <100>;
 	};
 
-	rtl972_sw2: spidev@1 {
-		compatible = "realtek,rtl9072-aa";
+	rtl972_sw2: spidev@2 {
+		compatible = "rohm,dh2228fv";
 		spi-max-frequency = <4000000>;
-		reg = <1>;
+		reg = <2>;
 		fsl,spi-cs-sck-delay = <100>;
 		fsl,spi-sck-cs-delay = <100>;
 	};
