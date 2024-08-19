@@ -35,7 +35,8 @@
 		compatible = "l4,psm";
 		reg = <0x00 0xff802000 0x00 0x1000>;
 		l4vmm,vbus-dev = "l4,psm";
-		status = "disabled";
+		l4vmm,force-enable;
+		status = "okay";
 	};
 	
 	reserved-memory {
