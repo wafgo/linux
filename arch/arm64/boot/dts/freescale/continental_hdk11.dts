@@ -21,6 +21,15 @@
 };
 
 
+&pfe_reserved_bmu2 {
+	status = "disabled";
+};
+
+&pfe_reserved_rt{
+	status = "disabled";
+};
+
+
 &pfe_mdio2 {
 	/* AQR113 on S32G-PROCEVB3-S */
 	pfe_mdio_a_phy8: ethernet-phy@8 {
