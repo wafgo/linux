@@ -35,10 +35,15 @@
 		compatible = "l4,psm";
 		reg = <0x00 0xff802000 0x00 0x1000>;
 		l4vmm,vbus-dev = "l4,psm";
-		l4vmm,force-enable;
-		status = "okay";
 	};
-	
+
+	ipcf: ipcf@34783000 {
+			compatible = "s32g,sram-ipcf";
+			reg = <0x00 0x34783000 0x00 0x3E800>;
+			l4vmm,vbus-dev = "s32g,sram-ipcf";
+	};
+
+
 	reserved-memory {
 		pfebufs@a0000000 {
 			compatible = "shared-dma-pool";
@@ -58,12 +63,6 @@
 		#size-cells = <1>;
 		compatible = "simple-bus";
 		ranges = <0x0 0x0 0xf1100000 0x40000>;
-
-		ipcf: ipcf@34783000 {
-			compatible = "s32g,sram-ipcf";
-			reg = <0x00 0x34783000 0x00 0x3E800>;
-			l4vmm,vbus-dev = "s32g,sram-ipcf";
-		};
 
 		virtio_rng@15000 {
 			compatible = "virtio,mmio";
