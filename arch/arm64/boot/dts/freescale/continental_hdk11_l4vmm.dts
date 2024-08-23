@@ -1806,7 +1806,7 @@ we need to move it to another location
 };
 
 &mscm0 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce {
