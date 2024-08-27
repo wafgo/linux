@@ -1,0 +1,355 @@
+#include <dt-bindings/gpio/gpio.h>
+
+&i2c2 {
+	pinctrl-names = "default", "gpio";
+	pinctrl-0 = <&i2c2_pins>;
+	pinctrl-1 = <&i2c2_gpio_pins>;
+	scl-gpios = <&gpio 21 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 22 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
+	/* GPIO expanders */
+	pca9539@74 {
+			compatible = "nxp,pca9539";
+			reg = <0x74>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			CAM1_EN {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+			        output-low;
+			        line-name = "CAM1_EN";
+			};
+
+			CAM2_EN {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+			        output-low;
+			        line-name = "CAM2_EN";
+			};
+
+			CAM3_EN {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM4_EN {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM5_EN {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM6_EN {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM7_EN {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM8_EN {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM9_EN {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			CAM10_EN {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			THER_EXP_HSSW {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			I_SEH_EXP_HSSW {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			I_SEL_EXP_HSSW {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW1 {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW2 {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+
+			DIAG_EN_EXP_HSSW3 {
+				gpio-hog;
+				gpios = <15 GPIO_ACTIVE_HIGH>;
+				output-low;
+			};
+		};
+
+		pca9539@76 {
+			compatible = "nxp,pca9539";
+			reg = <0x76>;
+			gpio-controller;
+			#gpio-cells = <0x02>;
+			pinctrl-names = "default";
+
+			EN_SMH_SI_3V3_SMPS_SYS {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				output-high;
+				line-name = "EN_SMH_SI_3V3_SMPS_SYS";
+			};
+
+			EN_SMH_SI_1V8_SMPS_SYS {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_1V2_SMPS_SYS {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_1V1_SMPS_SYS {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_0V9_SMPS_A_SYS {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_0V9_SMPS_B_SYS {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_0V8_SMPS_AB {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_CAN_FAS {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			PG_3V3_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V8_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V2_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_1V1_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V9_SMPS_A_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V9_SMPS_B_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V8_SMPS_A_SMH_P {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_0V8_SMPS_B_SMH_P {
+				gpio-hog;
+				gpios = <15 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+		};
+
+		pca9539@75 {
+			compatible = "nxp,pca9539";
+			reg = <0x75>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			EN_SMH_P_PREREG_SMPS_IPM {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_5V0_SMPS_IPM {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_SI_CAN_C {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			EN_SMH_P_PUMP_SMPS {
+				gpio-hog;
+				gpios = <3 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_STB_SMH_SI_CAN_FAS {
+				gpio-hog;
+				gpios = <4 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_RESET_SMH_P_CLK2 {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_RESET_SMH_P_CLK1 {
+				gpio-hog;
+				gpios = <6 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			N_RSTB_SMH_P_PCIE_SW {
+				gpio-hog;
+				gpios = <7 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+
+			PG_PREREG_SMPS_IPM_SMH_P {
+				gpio-hog;
+				gpios = <8 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_IPM_SMH_P {
+				gpio-hog;
+				gpios = <9 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_PREREG_SMPS_FPM_SMH_P {
+				gpio-hog;
+				gpios = <10 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_FPM_SMH_P {
+				gpio-hog;
+				gpios = <11 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_BUCK_BOOST {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			PG_5V0_SMPS_SYS_SMH_SI {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+		};
+
+		pca9539@77 {
+			compatible = "nxp,pca9539";
+			reg = <0x77>;
+			pinctrl-names = "default";
+			gpio-controller;
+			#gpio-cells = <0x02>;
+
+			ALERT_TEMP_1_SMH_P {
+				gpio-hog;
+				gpios = <0 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			ALERT_TEMP_2_SMH_P {
+				gpio-hog;
+				gpios = <1 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			ALERT_TEMP_3_SMH_P {
+				gpio-hog;
+				gpios = <2 GPIO_ACTIVE_HIGH>;
+				input;
+			};
+
+			GPI2_SOM2_MMH_SMH {
+				gpio-hog;
+				gpios = <5 GPIO_ACTIVE_HIGH>;
+				input;
+		        };
+		        N_RESET_SMH_P_ETH_SW1 {
+				gpio-hog;
+				gpios = <12 GPIO_ACTIVE_HIGH>;
+				output-high;
+		        };
+		        N_RESET_SMH_P_ETH_SW2 {
+				gpio-hog;
+				gpios = <13 GPIO_ACTIVE_HIGH>;
+				output-high;
+			};
+		};
+};

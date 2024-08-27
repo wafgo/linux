@@ -2,387 +2,36 @@
 /*
 * Copyright 2023 Continental Automotive Technologies GmbH
 * Author: Wadim Mueller 
-*/
+ */
 
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
 #include "s32g2.dtsi"
 #include "micron-mt35xu01g-qspi-nor.dtsi"
-#include "hdk11-gpio-expanders-no-hogs.dtsi"
-#include "hdk11-siul-gpio-no-hogs.dtsi"
-
+#include "hdk11-gpio-expanders.dtsi"
+#include "hdk11-siul-gpio.dtsi"
 
 / {
-	model = "Virtual ADC435";
-
+	model = "Continental HDK v1.1";
 	chosen {
-		stdout-path = "serial8:115200n8";
+		stdout-path = "serial1:115200n8";
 	};
 
-	pmu {
-		status = "disabled";
-	};
-
-	memory@0 {
-		device_type = "memory";
-		reg = <0x00 0x00 0x00 0x80000000>;
-		l4vmm,dscap = "ram";
-	};
-
-	memory@1 {
-		device_type = "memory";
-		reg = <0x00 0x00 0x00 0x80000000>;
-		l4vmm,dscap = "ram2";
-	};
-
-	vm_ctl@ff802000 {
-		compatible = "l4,psm";
-		reg = <0x00 0xff802000 0x00 0x1000>;
-		l4vmm,vbus-dev = "l4,psm";
-	};
-
-	ipcf: ipcf@34783000 {
-			compatible = "s32g,sram-ipcf";
-			reg = <0x00 0x34783000 0x00 0x3E800>;
-			l4vmm,vbus-dev = "s32g,sram-ipcf";
-	};
-
-
-	reserved-memory {
-		pfebufs@a0000000 {
-			compatible = "shared-dma-pool";
-			reg = <0x00 0xa0000000 0x00 0x3e0000>;
-			no-map;
-			l4vmm,force-enable;
-		};
-	};
-		
 	usbphynop: usbphynop {
 		compatible = "usb-nop-xceiv";
 		#phy-cells = <0>;
 	};
-
-	vmm: l4vmm {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "simple-bus";
-		ranges = <0x0 0x0 0xf1100000 0x40000>;
-
-		virtio_rng@15000 {
-			compatible = "virtio,mmio";
-			reg = <0x20000 0x100 0 0>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "rng";
-			l4vmm,virtiocap = "rng";
-			status = "disabled";
-			l4vmm,init-kaslr-seed;
-		};
-
-		hvc0: virtio_uart@20000 {
-			compatible = "virtio,mmio";
-			reg = <0x20000 0x100>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "console";
-			status = "okay";
-		};
-
-		virtio_net@10000 {
-			compatible = "virtio,mmio";
-			reg = <0x10000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "net";
-			status = "okay";
-		};
-
-		virtio_net@11000 {
-			compatible = "virtio,mmio";
-			reg = <0x11000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "net1";
-			status = "disabled";
-		};
-
-		virtio_net@12000 {
-			compatible = "virtio,mmio";
-			reg = <0x12000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "net2";
-			status = "disabled";
-		};
-
-		virtio_net@13000 {
-			compatible = "virtio,mmio";
-			reg = <0x13000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "net3";
-			status = "disabled";
-		};
-
-		virtio_net@14000 {
-			compatible = "virtio,mmio";
-			reg = <0x14000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "net4";
-			status = "disabled";
-		};
-
-		virtio_ser@21000 {
-			compatible = "virtio,mmio";
-			reg = <0x21000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "filed1";
-			status = "disabled";
-		};
-
-		virtio_ser@22000 {
-			compatible = "virtio,mmio";
-			reg = <0x22000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 141 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "filed2";
-			status = "disabled";
-		};
-
-		virtio_ser@23000 {
-			compatible = "virtio,mmio";
-			reg = <0x23000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 142 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "ser2";
-			status = "disabled";
-		};
-
-		virtio_ser@24000 {
-			compatible = "virtio,mmio";
-			reg = <0x24000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 143 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "ser3";
-			status = "disabled";
-		};
-
-		virtio_ser@25000 {
-			compatible = "virtio,mmio";
-			reg = <0x25000 0x200>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "ser4";
-			status = "disabled";
-		};
-
-		virtio_block@2000 {
-			compatible = "virtio,mmio";
-			reg = <0x2000 0x1000>;
-			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk1";
-			status = "okay";
-		};
-		virtio_block@3000 {
-			compatible = "virtio,mmio";
-			reg = <0x3000 0x1000>;
-			interrupt-parent = <0x01>;
-			interrupts = <0x00 0x83 0x04>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk2";
-			status = "okay";
-		};
-
-		virtio_block@4000 {
-			compatible = "virtio,mmio";
-			reg = <0x4000 0x1000>;
-			interrupts = <0x00 0x84 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk3";
-			status = "okay";
-		};
-
-		virtio_block@5000 {
-			compatible = "virtio,mmio";
-			reg = <0x5000 0x1000>;
-			interrupts = <0x00 0x85 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk4";
-			status = "okay";
-		};
-
-		virtio_block@6000 {
-			compatible = "virtio,mmio";
-			reg = <0x6000 0x1000>;
-			interrupts = <0x00 0x86 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk5";
-			status = "okay";
-		};
-
-		virtio_block@7000 {
-			compatible = "virtio,mmio";
-			reg = <0x7000 0x1000>;
-			interrupts = <0x00 0x87 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk6";
-			status = "okay";
-		};
-
-		virtio_block@8000 {
-			compatible = "virtio,mmio";
-			reg = <0x8000 0x1000>;
-			interrupts = <0x00 0x88 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk7";
-			status = "okay";
-		};
-
-		virtio_block@9000 {
-			compatible = "virtio,mmio";
-			reg = <0x9000 0x1000>;
-			interrupts = <0x00 0x89 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk8";
-			status = "okay";
-		};
-
-		virtio_block@a000 {
-			compatible = "virtio,mmio";
-			reg = <0xa000 0x1000>;
-			interrupts = <0x00 0x8a 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk9";
-			status = "okay";
-		};
-
-		virtio_block@b000 {
-			compatible = "virtio,mmio";
-			reg = <0xb000 0x1000>;
-			interrupts = <0x00 0x8b 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk10";
-			status = "okay";
-		};
-
-		virtio_block@c000 {
-			compatible = "virtio,mmio";
-			reg = <0xc000 0x1000>;
-			interrupts = <0x00 0x8c 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk11";
-			status = "okay";
-		};
-
-		virtio_block@d000 {
-			compatible = "virtio,mmio";
-			reg = <0xd000 0x1000>;
-			interrupts = <0x00 0x8d 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk12";
-			status = "okay";
-		};
-
-		virtio_block@e000 {
-			compatible = "virtio,mmio";
-			reg = <0xe000 0x1000>;
-			interrupts = <0x00 0x8e 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk13";
-			status = "okay";
-		};
-
-		virtio_block@f000 {
-			compatible = "virtio,mmio";
-			reg = <0xf000 0x1000>;
-			interrupts = <0x00 0x8f 0x04>;
-			interrupt-parent = <0x01>;
-			l4vmm,vdev = "proxy";
-			l4vmm,virtiocap = "disk14";
-			status = "okay";
-		};
-	};
 };
 
-&pci_shared_memory0 {
-	device_type = "memory";
-	status = "disabled";
-};
-
-&pci_shared_memory1 {
-	device_type = "memory";
-	status = "disabled";
-};
-
-&hse_reserved {
-	device_type = "memory";
-	status = "disabled";
-};
 
 &pfe_reserved_bmu2 {
-	status = "enabled";
-	l4vmm,force-enable;
+	status = "disabled";
 };
 
 &pfe_reserved_rt{
-	status = "enabled";
-	l4vmm,force-enable;
-};
-
-&pfe_reserved {
-	status = "enabled";
-	l4vmm,force-enable;
-};
-
-&pfe_reserved_bdr{
-	status = "enabled";
-	l4vmm,force-enable;
-};
-
-&aliases {
-	serial8= &hvc0;
-};
-
-&uart0 {
 	status = "disabled";
 };
 
-&uart1 {
-	status = "disabled";
-};
-
-&uart2 {
-	status = "disabled";
-};
-
-&psci {
-	method = "hvc";
-};
 
 &pfe_mdio2 {
 	/* AQR113 on S32G-PROCEVB3-S */
@@ -394,22 +43,22 @@
 
 &serdes0 {
 	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
-	status = "disabled";
+	status = "okay";
 };
 
 &serdes1 {
 	nxp,sys-mode = <PCIE_GEN3X2_MODE>;
-	status = "disabled";
+	status = "okay";
 };
 
 &pcie0 {
-	status = "disabled";
+	status = "okay";
 };
 
 &pcie1 {
 	compatible = "nxp,s32cc-pcie-ep";
 	num-lanes = <2>;
-	status = "disabled";
+	status = "okay";
 };
 
 &pfe_netif0 {
@@ -419,7 +68,7 @@
 };
 
 &usbmisc {
-	status = "disabled";
+	status = "okay";
 };
 
 &usbotg {
@@ -439,8 +88,10 @@
 	pinctrl-1 = <&i2c1_gpio_pins>;
 	scl-gpios = <&gpio 163 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	sda-gpios = <&gpio 165 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
-	status = "disabled";
+	status = "okay";
 };
+
+
 
 &i2c4 {
 	pinctrl-names = "default", "gpio";
@@ -448,7 +99,7 @@
 	pinctrl-1 = <&i2c4_gpio_pins>;
 	scl-gpios = <&gpio 34 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	sda-gpios = <&gpio 33 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
-	status = "disabled";
+	status = "okay";
 };
 
 &usdhc0 {
@@ -457,39 +108,39 @@
 	pinctrl-0 = <&sd0_pins_default>;
 	pinctrl-1 = <&sd0_pins_100mhz>;
 	pinctrl-2 = <&sd0_pins_200mhz>;
-	status = "disabled";
+	status = "okay";
 };
 
 &can0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can0_pins>;
-	status = "disabled";
+	status = "okay";
 };
 
 &can2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can2_pins>;
-	status = "disabled";
+	status = "okay";
 };
 
 &fccu {
-	status = "disabled";
+	status = "okay";
 };
 
 &swt3 {
-	status = "disabled";
+	status = "okay";
 };
 
 &swt4 {
-	status = "disabled";
+	status = "okay";
 };
 
 &swt5 {
-	status = "disabled";
+	status = "okay";
 };
 
 &swt6 {
-	status = "disabled";
+	status = "okay";
 };
 
 &pit0 {
@@ -497,12 +148,12 @@
 };
 
 &pit1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &pinctrl {
 	status = "okay";
-	l4vmm,force-enable;
+
 	can0_pins: can0_pins {
 		can0_grp0 {
 			pinmux = <S32CC_PINMUX(44, FUNC1)>; /*PC_12 -> TXD CANFD FAS*/
@@ -1027,76 +678,76 @@
 };
 
 &llce_dte_sram {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_ppe_rx_sram {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_ppe_tx_sram {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_frpe_sram {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_shmem {
-	status = "disabled";
+	status = "okay";
 };
 
 
 &llce_can1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can2 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can3 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can4 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can5 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can6 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can7 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can8 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can9 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can10 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can11 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can12 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can13 {
-	status = "disabled";
+	status = "okay";
 };
 
 &llce_can14 {
@@ -1163,6 +814,26 @@
 &pfe_mdio2 {
 	/* unused */
 	status = "disabled";
+	/* /\* KSZ9031RNX over SJA1105Q P3 *\/ */
+	/* pfe_mdio_a_phy2: ethernet-phy@2 { */
+	/* 	reg = <2>; */
+	/* }; */
+	/* /\* KSZ9031RNX over SJA1105Q P4 *\/ */
+	/* pfe_mdio_a_phy3: ethernet-phy@3 { */
+	/* 	reg = <3>; */
+	/* }; */
+
+	/* /\* TJA1102 over SJA1105Q P1 *\/ */
+	/* pfe_mdio_a_phy6: ethernet-phy@6 { */
+	/* 	#address-cells = <1>; */
+	/* 	#size-cells = <0>; */
+	/* 	reg = <6>; */
+
+	/* 	/\* TJA1102 over SJA1105Q P2 *\/ */
+	/* 	pfe_mdio_a_phy7: ethernet-phy@7 { */
+	/* 		reg = <7>; */
+	/* 	}; */
+	/* }; */
 };
 
 &pfe_netif1 {
@@ -1180,11 +851,11 @@
 };
 
 &edma0 {
-	status = "disabled";
+	status = "okay";
 };
 
 &edma1 {
-	status = "disabled";
+	status = "okay";
 };
 
 
@@ -1228,13 +899,20 @@
 	};
 };
 
+	/* misc_signals_bi: mis_signals_bi { */
+	/* 	pinmux = <S32CC_PINMUX(120, FUNC0)>;/\*PH08 -> GPIO0_PCIE_SW*\/ */
+	/* 	input-enable; */
+	/* 	slew-rate = <S32CC_GPIO_3V3_SLEW_50MHZ>; */
+	/* }; */
+	
+
 &spi1 {
 	pinctrl-0 = <&dspi1_pins>, <&dspi1_uss_enable>;
 	pinctrl-1 = <&dspi1slave_pins>;
 	pinctrl-names = "default", "slave";
 	#address-cells = <1>;
 	#size-cells = <0>;
-	status = "disabled";
+	status = "okay";
 
 	spidev0: spidev@0 {
 		compatible = "atmel,atic176"; /* ??? there is no driver for it*/
@@ -1252,80 +930,11 @@
 &pwm0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&ftm0_pins>;
-	status = "disabled";
+	status = "okay";
 };
 
 &pwm1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&ftm1_pins>;
-	status = "disabled";
-};
-
-/* Thats dangerous, here we place the bootstrap image ...
-we need to move it to another location
-*/ 
-&ddr_errata_reserved {
-	device_type = "memory";
-	status = "disabled";
-};
-
-&ddr_errata {
-	status = "disabled";
-};
-
-&rtc0 {
-	status = "disabled";
-};
-
-&nvram {
-	status = "disabled";
-};
-
-&nvram1 {
-	status = "disabled";
-};
-
-&ocotp {
-	status = "disabled";
-};
-
-&tmu {
-	status = "disabled";
-};
-
-&stm0 {
-	status = "disabled";
-};
-
-&stm1 {
-	status = "disabled";
-};
-
-&stm7 {
-	status = "disabled";
-};
-
-&hse {
-	status = "disabled";
-};
-
-&adc0 {
-	status = "disabled";
-};
-
-&adc1 {
-	status = "disabled";
-};
-
-&perf {
-	status = "disabled";
-};
-
-&mscm0 {
 	status = "okay";
 };
-
-&llce {
-	status = "disabled";
-};
-

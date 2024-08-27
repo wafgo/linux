@@ -1,0 +1,129 @@
+#include <dt-bindings/gpio/gpio.h>
+
+&gpio {
+	N_PERST_SMH_P0_PCIE_SW {
+		gpio-hog;
+		gpios = <81 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PERST_SMH_P0_PCIE_SW";
+	};
+
+	N_PERST_SMH_P1_PCIE_SW {
+		gpio-hog;
+		gpios = <61 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PERST_SMH_P1_PCIE_SW";
+	};
+	
+	N_PWDNB_DES_3 {
+		gpio-hog;
+		gpios = <83 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_3";
+	};
+
+	N_RESET_SMH_SOM2_MMH {
+		gpio-hog;
+		gpios = <121 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_SOM2_MMH";
+	};
+
+	N_DIS_SMH_ETH_SW2 {
+		gpio-hog;
+		gpios = <159 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_DIS_SMH_ETH_SW2";
+	};
+
+	N_DIS_SMH_ETH_SW1 {
+		gpio-hog;
+		gpios = <149 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_DIS_SMH_ETH_SW1";
+	};
+
+	PWM_SMH_P_FAN {
+		gpio-hog;
+		gpios = <116 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "PWM_SMH_P_FAN";
+	};
+
+	EN_SMH_P_PREREG_SMPS_FPM {
+		gpio-hog;
+		gpios = <122 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "EN_SMH_P_PREREG_SMPS_FPM";
+	};
+
+	EN_SMH_P_5V0_SMPS_FPM {
+		gpio-hog;
+		gpios = <145 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "EN_SMH_P_5V0_SMPS_FPM";
+	};
+
+	N_STB_SMH_SI_CAN_C {
+		gpio-hog;
+		gpios = <161 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_STB_SMH_SI_CAN_C";
+	};
+
+	CLK_SYNC_SMH_SOM1 {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "CLK_SYNC_SMH_SOM1";
+	};
+
+	CLK_SYNC_SMH_DBG {
+		gpio-hog;
+		gpios = <12 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "CLK_SYNC_SMH_DBG";
+	};
+
+	N_RESET_SMH_SOM1_MMH {
+		gpio-hog;
+		gpios = <24 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_SOM1_MMH";
+	};
+
+	N_PWDNB_DES_1 {
+		gpio-hog;
+		gpios = <57 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_1";
+	};
+
+	N_RESET_SMH_P_EXP {
+		gpio-hog;
+		gpios = <78 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_P_EXP";
+	};
+
+	QSPI_NRESET {
+		gpio-hog;
+		gpios = <84 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "QSPI_NRESET";
+	};
+
+	N_RESET_SMH_USS {
+		gpio-hog;
+		gpios = <98 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_RESET_SMH_USS";
+	};
+
+	N_PWDNB_DES_2 {
+		gpio-hog;
+		gpios = <99 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "N_PWDNB_DES_2";
+	};
+};

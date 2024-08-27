@@ -1,0 +1,42 @@
+#include <dt-bindings/gpio/gpio.h>
+
+&i2c2 {
+	pinctrl-names = "default", "gpio";
+	pinctrl-0 = <&i2c2_pins>;
+	pinctrl-1 = <&i2c2_gpio_pins>;
+	scl-gpios = <&gpio 21 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 22 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
+	/* GPIO expanders */
+	pca9539@74 {
+		compatible = "nxp,pca9539";
+		reg = <0x74>;
+		pinctrl-names = "default";
+		gpio-controller;
+		#gpio-cells = <0x02>;
+	};
+
+	pca9539@76 {
+		compatible = "nxp,pca9539";
+		reg = <0x76>;
+		gpio-controller;
+		#gpio-cells = <0x02>;
+		pinctrl-names = "default";
+	};
+
+	pca9539@75 {
+		compatible = "nxp,pca9539";
+		reg = <0x75>;
+		pinctrl-names = "default";
+		gpio-controller;
+		#gpio-cells = <0x02>;
+	};
+
+	pca9539@77 {
+		compatible = "nxp,pca9539";
+		reg = <0x77>;
+		pinctrl-names = "default";
+		gpio-controller;
+		#gpio-cells = <0x02>;
+	};
+};
