@@ -8,8 +8,9 @@
 #include <dt-bindings/gpio/gpio.h>
 #include "s32g2.dtsi"
 #include "micron-mt35xu01g-qspi-nor.dtsi"
-#include "hdk11-gpio-expanders-no-hogs.dtsi"
-#include "hdk11-siul-gpio-no-hogs.dtsi"
+#include "hdk11-siul-gpio.dtsi"
+#include "hdk11-gpio-expanders.dtsi"
+
 
 / {
 	model = "Continental HDK v1.1";
@@ -114,13 +115,13 @@
 &can0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can0_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &can2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&can2_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &fccu {
@@ -699,55 +700,55 @@
 
 
 &llce_can1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can3 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can4 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can5 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can6 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can7 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can8 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can9 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can10 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can11 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can12 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can13 {
-	status = "okay";
+	status = "disabled";
 };
 
 &llce_can14 {

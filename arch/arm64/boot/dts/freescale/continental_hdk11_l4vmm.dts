@@ -8,9 +8,8 @@
 #include <dt-bindings/gpio/gpio.h>
 #include "s32g2.dtsi"
 #include "micron-mt35xu01g-qspi-nor.dtsi"
-#include "hdk11-gpio-expanders-no-hogs.dtsi"
-#include "hdk11-siul-gpio-no-hogs.dtsi"
-
+#include "hdk11-siul-gpio.dtsi"
+#include "hdk11-gpio-expanders.dtsi"
 
 / {
 	model = "Virtual ADC435";
