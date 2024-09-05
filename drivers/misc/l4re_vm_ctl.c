@@ -11,6 +11,7 @@ struct vmctl {
 	struct Mcm_cmd_header __iomem *header;
 	struct Mcm_cmd_client __iomem *hv_data;
 	struct Mcm_cmd_client __iomem *alpha_data;
+        struct Mcm_cmd_client __iomem *beta_data;
 };
 
 static void write_status(struct vmctl *vmctl_data, uint32_t val)
@@ -27,9 +28,13 @@ static void write_command_request(struct vmctl *vmctl_data, uint32_t val, uint32
 	if (flag == ALPHA_VM_FLAG) {
 		writel(val, &vmctl_data->alpha_data->command);
 	}
+	else if (flag == BETA_VM_FLAG) {
+		writel(val, &vmctl_data->beta_data->command);
+	}
 	else if (flag == HV_FLAG) {
 		writel(val, &vmctl_data->hv_data->command);
 	}
+
 	pr_info(" write_command_request val: '%d'\n", val);
 }
 
@@ -150,6 +155,13 @@ static int vmctl_probe(struct platform_device *pdev)
                 pr_err("ioremap_cache Err: data '%lld'\n", res->start);
                 retval = PTR_ERR(vms->alpha_data);
                 goto out_release;
+        }
+
+	vms->beta_data = ioremap_cache(res->start + 0x60, resource_size(res));
+        if (IS_ERR(vms->beta_data)) {
+                pr_err("ioremap_cache Err: data '%lld'\n", res->start + 0x60);
+                retval = PTR_ERR(vms->beta_data);
+                goto out_release;
         }	
 	retval = sysfs_create_group(&pdev->dev.kobj, &attr_group);
 	if (retval) {
@@ -171,6 +183,7 @@ out_iounmap:
 	iounmap(vms->header);
 	iounmap(vms->hv_data);
 	iounmap(vms->alpha_data);
+	iounmap(vms->beta_data);
 out_release:
 	devm_release_mem_region(dev, res->start, resource_size(res));
 out_kfree:
