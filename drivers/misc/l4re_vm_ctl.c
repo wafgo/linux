@@ -78,6 +78,10 @@ static ssize_t command_request_store(struct device *dev,
 		write_command_request(
                         vmctl_data, MCM_CMD_KILL, ALPHA_VM_FLAG);
 	}
+	else if (!strncmp("BETA", buf, 4)){
+		write_command_request(
+                        vmctl_data, MCM_CMD_KILL, BETA_VM_FLAG);
+	}
         else if (!strncmp("LAUNCH", buf, LAUNCH_LEN)){
                 write_command_request(
                         vmctl_data, MCM_CMD_LAUNCH, ALPHA_VM_FLAG);

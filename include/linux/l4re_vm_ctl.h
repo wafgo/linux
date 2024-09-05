@@ -8,7 +8,8 @@
 
 #define HV_STATUS_LEN 9
 #define HV_FLAG	0
-#define ALPHA_VM_FLAG	1
+#define ALPHA_VM_FLAG 1
+#define BETA_VM_FLAG	2
 
 enum Mcm_hv_status {
 	MCM_HV_STATUS_UNKNOWN = 0,
