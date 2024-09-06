@@ -205,6 +205,7 @@ static int vmctl_remove(struct platform_device *pdev)
 	iounmap(vmctl_data->header);
 	iounmap(vmctl_data->hv_data);
 	iounmap(vmctl_data->alpha_data);
+	iounmap(vmctl_data->beta_data);
 	devm_release_mem_region(dev, res->start, resource_size(res));
 	devm_kfree(dev, vmctl_data);
 
