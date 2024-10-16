@@ -22,12 +22,12 @@
 		line-name = "N_PWDNB_DES_3";
 	};
 
-	N_RESET_SMH_SOM2_MMH {
-		gpio-hog;
-		gpios = <121 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "N_RESET_SMH_SOM2_MMH";
-	};
+	/* N_RESET_SMH_SOM2_MMH { */
+	/* 	gpio-hog; */
+	/* 	gpios = <121 GPIO_ACTIVE_HIGH>; */
+	/* 	output-high; */
+	/* 	line-name = "N_RESET_SMH_SOM2_MMH"; */
+	/* }; */
 
 	N_DIS_SMH_ETH_SW2 {
 		gpio-hog;
@@ -43,12 +43,12 @@
 		line-name = "N_DIS_SMH_ETH_SW1";
 	};
 
-	PWM_SMH_P_FAN {
-		gpio-hog;
-		gpios = <116 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "PWM_SMH_P_FAN";
-	};
+	/* PWM_SMH_P_FAN { */
+	/* 	gpio-hog; */
+	/* 	gpios = <116 GPIO_ACTIVE_HIGH>; */
+	/* 	output-high; */
+	/* 	line-name = "PWM_SMH_P_FAN"; */
+	/* }; */
 
 	EN_SMH_P_PREREG_SMPS_FPM {
 		gpio-hog;
@@ -90,6 +90,83 @@
 		gpios = <24 GPIO_ACTIVE_HIGH>;
 		output-high;
 		line-name = "N_RESET_SMH_SOM1_MMH";
+	};
+
+	SAFELOCK_SMH_SI {
+		gpio-hog;
+		gpios = <45 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "SAFELOCK_SMH_SI";
+	};
+
+	EN_SMH_SI_5V0_SMPS_SYS {
+		gpio-hog;
+		gpios = <59 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "EN_SMH_SI_5V0_SMPS_SYS";
+	};
+
+	PDB_SMH_SER {
+		gpio-hog;
+		gpios = <97 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "PDB_SMH_SER";
+	};
+
+	EN_EFUSE {
+		gpio-hog;
+		gpios = <101 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "EN_EFUSE";
+	};
+
+	SC_SMH_SI_MUX {
+		gpio-hog;
+		gpios = <113 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "SC_SMH_SI_MUX";
+	};
+
+	SB_SMH_SI_MUX {
+		gpio-hog;
+		gpios = <114 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "SB_SMH_SI_MUX";
+	};
+
+	EN_SMH_BUCK_BOOST {
+		gpio-hog;
+		gpios = <118 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "EN_SMH_BUCK_BOOST";
+	};
+
+	N_WC_SMH_EEPROM {
+		gpio-hog;
+		gpios = <119 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "N_WC_SMH_EEPROM";
+	};
+
+	SA_SMH_SI_MUX {
+		gpio-hog;
+		gpios = <144 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "SA_SMH_SI_MUX";
+	};
+
+	EN_SMH_USS {
+		gpio-hog;
+		gpios = <175 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "EN_SMH_USS";
+	};
+
+	SPI_DES3_SMH_3V3 {
+		gpio-hog;
+		gpios = <155 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "SPI_DES3_SMH_3V3";
 	};
 
 	N_PWDNB_DES_1 {
